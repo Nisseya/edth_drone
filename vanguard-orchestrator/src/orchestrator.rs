@@ -1,4 +1,4 @@
-use vanguard-core::*;
+use vanguard_core::*;
 
 pub struct OrchestratorState {
     pub threats: Vec<DetectedThreat>,

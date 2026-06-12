@@ -1,4 +1,4 @@
-use position::Position;
+use crate::position::Position;
 
 #[derive(Clone, Debug)]
 pub struct Interceptor {

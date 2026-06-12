@@ -3,9 +3,19 @@
 version = 4
 
 [[package]]
-name = "edth_2026"
+name = "vanguard-core"
 version = "0.1.0"
 
 [[package]]
-name = "interceptor"
+name = "vanguard-interceptor"
 version = "0.1.0"
+dependencies = [
+ "vanguard-core",
+]
+
+[[package]]
+name = "vanguard-orchestrator"
+version = "0.1.0"
+dependencies = [
+ "vanguard-core",
+]
