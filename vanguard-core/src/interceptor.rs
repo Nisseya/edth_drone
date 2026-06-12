@@ -3,40 +3,40 @@ use uuid::Uuid;
 use crate::position::Position;
 
 #[derive(Clone, Debug)]
-pub struct Interceptor {
+pub struct PlatformInterceptor {
     pub id: Uuid,
     pub name: String,
-
     pub position: Position,
-
-    pub sight_angle: f64,
-    pub detection_range: f64,
-    pub turn_speed: f64,
-
-    pub ammo_remaining: usize,
-
-    pub current_order: Option<InterceptorOrder>,
+    pub interceptors: Vec<Interceptor>,
+    pub range: f64,
 }
 
-#[derive(Clone, Debug, PartialEq)]
-pub enum InterceptorOrder {
+#[derive(Clone, Debug)]
+pub struct Interceptor {
+    pub id: Uuid,
+    pub position: Position,
+    pub state: InterceptorState,
+}
+
+#[derive(Clone, Debug)]
+pub enum InterceptorState {
     Idle,
-    MoveTo(Position),
-    Intercept(usize),
+    MovingTo(Position),
+    Intercepting(Uuid),
+    Destroyed,
 }
 
 #[derive(Clone, Debug)]
 pub struct InterceptorReport {
-    pub interceptor_id: Uuid,
-    pub position: Position,
+    pub platform_id: Uuid,
     pub threats: Vec<DetectedThreat>,
-    pub ammo_remaining: usize,
+    pub interceptors_remaining: usize,
     pub timestamp: u64,
 }
 
 #[derive(Clone, Debug)]
 pub struct DetectedThreat {
-    pub id: usize,
+    pub id: Uuid,
     pub position: Position,
     pub threat_level: usize,
 }

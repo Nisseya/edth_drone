@@ -2,10 +2,11 @@ pub mod interceptor;
 pub mod position;
 
 pub use interceptor::{
-    InterceptorOrder,
-    InterceptorReport,
+    DetectedThreat,
     Interceptor,
-    DetectedThreat 
+    InterceptorReport,
+    InterceptorState,
+    PlatformInterceptor,
 };
 
 pub use position::Position;

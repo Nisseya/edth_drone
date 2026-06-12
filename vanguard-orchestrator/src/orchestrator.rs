@@ -2,21 +2,21 @@ use vanguard_core::*;
 
 pub struct OrchestratorState {
     pub threats: Vec<DetectedThreat>,
-    pub interceptors: Vec<Interceptor>,
+    pub platforms: Vec<PlatformInterceptor>,
 }
 
 impl OrchestratorState {
-    pub fn new(interceptors: Vec<Interceptor>) -> Self {
+    pub fn new(platforms: Vec<PlatformInterceptor>) -> Self {
         Self {
             threats: Vec::new(),
-            interceptors,
+            platforms,
         }
     }
 
     pub fn tick(
         &mut self,
         reports: &[InterceptorReport],
-    ) -> Vec<(Uuid, InterceptorOrder)> {
+    ) -> Vec<(Uuid, InterceptorState)> {
         self.update(reports);
         self.assign()
     }
@@ -25,33 +25,32 @@ impl OrchestratorState {
         self.threats.clear();
 
         for report in reports {
-            if let Some(interceptor) = self
-                .interceptors
-                .iter_mut()
-                .find(|i| i.id == report.interceptor_id)
-            {
-                interceptor.position = report.position.clone();
-                interceptor.ammo_remaining = report.ammo_remaining;
-            }
-
             self.threats.extend(report.threats.iter().cloned());
         }
     }
 
-    fn assign(&mut self) -> Vec<(Uuid, InterceptorOrder)> {
+    fn assign(&mut self) -> Vec<(Uuid, InterceptorState)> {
         let mut updates = Vec::new();
 
-        for interceptor in &mut self.interceptors {
-            let order = self
-                .threats
-                .iter()
-                .max_by_key(|t| t.threat_level)
-                .map(|t| InterceptorOrder::Intercept(t.id))
-                .unwrap_or(InterceptorOrder::Idle);
+        let Some(threat) = self.threats.iter().max_by_key(|t| t.threat_level) else {
+            return updates;
+        };
 
-            if interceptor.current_order.as_ref() != Some(&order) {
-                interceptor.current_order = Some(order.clone());
-                updates.push((interceptor.id, order));
+        for platform in &mut self.platforms {
+            let already_engaged = platform.interceptors.iter().any(|i| {
+                matches!(i.state, InterceptorState::Intercepting(target) if target == threat.id)
+            });
+            if already_engaged {
+                continue;
+            }
+
+            if let Some(interceptor) = platform
+                .interceptors
+                .iter_mut()
+                .find(|i| matches!(i.state, InterceptorState::Idle))
+            {
+                interceptor.state = InterceptorState::Intercepting(threat.id);
+                updates.push((interceptor.id, interceptor.state.clone()));
             }
         }
 
@@ -59,13 +58,7 @@ impl OrchestratorState {
     }
 
     pub fn display(&self) {
-        println!(
-            "Threats: {}",
-            self.threats.len()
-        );
-        println!(
-            "Interceptors: {}",
-            self.interceptors.len()
-        );
+        println!("Threats: {}", self.threats.len());
+        println!("Platforms: {}", self.platforms.len());
     }
 }

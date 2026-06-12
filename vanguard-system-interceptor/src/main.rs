@@ -2,36 +2,42 @@ mod cli;
 
 use clap::Parser;
 use uuid::Uuid;
-use vanguard_core::{Interceptor, Position};
+use vanguard_core::{Interceptor, InterceptorState, PlatformInterceptor, Position};
 
 use crate::cli::Args;
 
-const SIGHT_ANGLE: f64 = 120.0;
 const DETECTION_RANGE: f64 = 1_500.0;
-const TURN_SPEED: f64 = 90.0;
 
 fn main() {
     let args = Args::parse();
+    let position = Position { x: args.x, y: args.y };
 
-    let system = Interceptor {
+    let interceptors: Vec<Interceptor> = (0..args.interceptors)
+        .map(|_| Interceptor {
+            id: Uuid::new_v4(),
+            position: position.clone(),
+            state: InterceptorState::Idle,
+        })
+        .collect();
+
+    let platform = PlatformInterceptor {
         id: Uuid::new_v4(),
         name: args.name,
-        position: Position { x: args.x, y: args.y, z: args.z },
-        sight_angle: SIGHT_ANGLE,
-        detection_range: DETECTION_RANGE,
-        turn_speed: TURN_SPEED,
-        ammo_remaining: args.interceptors,
-        current_order: None,
+        position,
+        interceptors,
+        range: DETECTION_RANGE,
     };
 
     println!(
-        "{} (id {}) online at ({:.0}, {:.0}, {:.0}) — detection range {:.0} m, {} interceptor(s) ready",
-        system.name,
-        system.id,
-        system.position.x,
-        system.position.y,
-        system.position.z,
-        system.detection_range,
-        system.ammo_remaining,
+        "{} (id {}) online at ({:.0}, {:.0}) — range {:.0} m, {} interceptor(s) ready",
+        platform.name,
+        platform.id,
+        platform.position.x,
+        platform.position.y,
+        platform.range,
+        platform.interceptors.len(),
     );
+    for interceptor in &platform.interceptors {
+        println!("  interceptor {} idle", interceptor.id);
+    }
 }
