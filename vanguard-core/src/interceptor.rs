@@ -44,11 +44,7 @@ pub struct InterceptorReport {
     pub timestamp: u64,
 }
 
-<<<<<<< HEAD
-#[derive(Clone, Debug, Serialize, Deserialize)]
-=======
 #[derive(Clone, Debug, Deserialize, Serialize)]
->>>>>>> 4c48533 (platform binary ready)
 pub struct DetectedThreat {
     pub id: Uuid,
     pub position: Position,

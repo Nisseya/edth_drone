@@ -255,3 +255,58 @@ impl Platform {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use uuid::Uuid;
+
+    use super::*;
+
+    use vanguard_core::{
+        DetectedThreat, Interceptor, InterceptorState, NeighborPlatform, PlatformInterceptor,
+        Position, Speed,
+    };
+
+    #[tokio::test]
+    async fn closest_platform_wins() {
+        let platform = PlatformInterceptor {
+            id: Uuid::new_v4(),
+            name: "alpha".to_string(),
+            position: Position { x: 0.0, y: 0.0 },
+            range: 1000.0,
+            interceptors: vec![Interceptor {
+                id: Uuid::new_v4(),
+                position: Position { x: 0.0, y: 0.0 },
+                state: InterceptorState::Idle,
+            }],
+            neighbor_platforms: vec![NeighborPlatform {
+                id: Uuid::new_v4(),
+                position: Position { x: 100.0, y: 100.0 },
+                interceptors_remaining: 1,
+            }],
+        };
+
+        let state = PlatformState {
+            platform,
+            threats: HashMap::new(),
+        };
+
+        let nats = async_nats::connect("nats://localhost:4222").await.unwrap();
+
+        let platform = Platform { state, nats };
+
+        let threat = DetectedThreat {
+            id: Uuid::new_v4(),
+            position: Position { x: 10.0, y: 10.0 },
+            speed: Speed { x: 0.0, y: 0.0 },
+            threat_level: 10,
+            classification: vanguard_core::interceptor::ThreatClassification::Unknown,
+            confidence: 1.0,
+            detected_at: 3.0,
+        };
+
+        assert!(platform.is_best_platform(&threat));
+    }
+}
