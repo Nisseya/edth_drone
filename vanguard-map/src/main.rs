@@ -9,8 +9,8 @@ use vanguard_core::{
 };
 
 const WORLD_RADIUS: f64 = 50_000.0; // ingress ring, well outside every radar bubble
-const TICK: std::time::Duration = std::time::Duration::from_millis(500);
-const PUBLISH_EVERY_TICKS: u64 = 2; // ground truth published every second
+const TICK: std::time::Duration = std::time::Duration::from_millis(250);
+const PUBLISH_EVERY_TICKS: u64 = 1; // ground truth published every 250 ms (4 Hz)
 const SECTOR_SPREAD_DEG: f64 = 20.0; // wave fans out within ±20° of one bearing
 const REAL_SPEED: std::ops::Range<f64> = 100.0..170.0; // attack drones, m/s
 const DECOY_SPEED: std::ops::Range<f64> = 70.0..120.0; // decoys, a bit slower
