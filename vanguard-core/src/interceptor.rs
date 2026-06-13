@@ -34,6 +34,7 @@ pub struct Interceptor {
 pub enum InterceptorState {
     Idle,
     MovingTo(Position),
+    Searching(Uuid),
     Intercepting(Uuid),
     Destroyed,
 }

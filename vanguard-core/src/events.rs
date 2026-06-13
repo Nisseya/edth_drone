@@ -58,10 +58,23 @@ pub enum Message {
         platform_id: PlatformId,
         interceptor: Interceptor,
     },
+
     ThreatDestroyed {
         threat_id: ThreatId,
         platform_id: PlatformId,
         interceptor_id: InterceptorId,
+    },
+    InterceptorTargetAssigned {
+        interceptor_id: Uuid,
+        threat_id: Uuid,
+    },
+    InterceptorObservation {
+        interceptor_id: Uuid,
+        threat: DetectedThreat,
+    },
+    InterceptorLaunched {
+        interceptor_id: Uuid,
+        threat_id: Uuid,
     },
 }
 

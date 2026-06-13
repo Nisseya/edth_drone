@@ -16,8 +16,8 @@ const NEIGHBOR_UPDATE: &str = "vanguard.neighbor.update";
 const STRATEGY_UPDATE: &str = "vanguard.strategy.update";
 
 use vanguard_core::{
-    DetectedThreat, InterceptorState, Message, NEW_PLATFORM, NeighborPlatform, Position,
-    ThreatTrack, interceptor::TrackStatus,
+    DetectedThreat, Interceptor, InterceptorState, Message, NEW_PLATFORM, NeighborPlatform,
+    Position, ThreatClassification, ThreatTrack, interceptor::TrackStatus,
 };
 
 pub struct Platform {
@@ -110,6 +110,8 @@ impl Platform {
                 return Ok(());
             };
 
+            interceptor.assigned_track = Some(threat_id);
+
             interceptor.state = InterceptorState::Intercepting(threat_id);
 
             interceptor.id
@@ -146,9 +148,14 @@ impl Platform {
         Ok(())
     }
 
-    fn handle_threat_engaged(&mut self, threat_id: Uuid) {
+    fn handle_threat_engaged(&mut self, threat_id: Uuid, _interceptor_id: Uuid) {
         self.state.engaged_threats.insert(threat_id);
+
         self.state.threats.remove(&threat_id);
+
+        if let Some(track) = self.state.tracks.get_mut(&threat_id) {
+            track.status = TrackStatus::Engaged;
+        }
     }
 
     fn handle_neighbor_update(
@@ -198,15 +205,50 @@ impl Platform {
             self.state.platform.name, track.threat_id, track.status,
         );
 
-        self.state.tracks.insert(track.threat_id, track.clone());
+        match track.status {
+            TrackStatus::Detected => {
+                self.state.engaged_threats.remove(&track.threat_id);
 
-        if track.status == TrackStatus::Engaged {
-            self.state.engaged_threats.insert(track.threat_id);
+                self.state.tracks.insert(track.threat_id, track.clone());
 
-            self.state.threats.remove(&track.threat_id);
+                self.state
+                    .threats
+                    .entry(track.threat_id)
+                    .or_insert(DetectedThreat {
+                        id: track.threat_id,
+                        position: track.position,
+                        speed: track.velocity,
+                        threat_level: track.threat_level,
+                        classification: ThreatClassification::Unknown,
+                        confidence: track.confidence,
+                        detected_at: track.last_update,
+                    });
+            }
+
+            TrackStatus::Engaged => {
+                self.state.engaged_threats.insert(track.threat_id);
+
+                self.state.threats.remove(&track.threat_id);
+
+                self.state.tracks.insert(track.threat_id, track);
+            }
+
+            TrackStatus::Destroyed => {
+                self.state.engaged_threats.remove(&track.threat_id);
+
+                self.state.threats.remove(&track.threat_id);
+
+                self.state.tracks.remove(&track.threat_id);
+            }
         }
 
         Ok(())
+    }
+
+    fn handle_interceptor_update(&mut self, interceptor: Interceptor) {
+        self.state
+            .known_interceptors
+            .insert(interceptor.id, interceptor);
     }
 
     async fn handle_message(&mut self, message: Message) -> Result<()> {
@@ -218,8 +260,12 @@ impl Platform {
                 self.handle_threat_detected(threat, source_platform).await?;
             }
 
-            Message::ThreatEngaged { threat_id, .. } => {
-                self.handle_threat_engaged(threat_id);
+            Message::ThreatEngaged {
+                threat_id,
+                platform_id,
+                interceptor_id,
+            } => {
+                self.handle_threat_engaged(threat_id, interceptor_id);
             }
 
             Message::NeighborUpdate {
@@ -243,12 +289,13 @@ impl Platform {
             Message::InterceptorUpdate {
                 platform_id,
                 interceptor,
-            } => {}
+            } => self.handle_interceptor_update(interceptor),
             Message::ThreatDestroyed {
                 threat_id,
                 platform_id,
                 interceptor_id,
             } => {}
+            _ => {}
         }
 
         Ok(())
