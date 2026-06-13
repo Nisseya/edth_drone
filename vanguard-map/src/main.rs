@@ -5,7 +5,8 @@ use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use uuid::Uuid;
 use vanguard_core::{
-    CONTROL_RESET, MAP_CONFIG, MapConfig, Position, THREAT_DESTROYED, THREATS_SUBJECT, Threat,
+    CONTROL_RESET, LEAKER_EVENT, MAP_CONFIG, MapConfig, Position, THREAT_DESTROYED, THREATS_SUBJECT,
+    Threat, ThreatDestroyed,
 };
 
 const WORLD_RADIUS: f64 = 50_000.0; // ingress ring, well outside every radar bubble
@@ -68,13 +69,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 continue;
             }
             Some(msg) = destroyed_sub.next() => {
-                if let Ok(id) = std::str::from_utf8(&msg.payload).unwrap_or("").parse::<Uuid>() {
-                    actives.retain(|a| a.threat.id != id);
+                if let Ok(event) = serde_json::from_slice::<ThreatDestroyed>(&msg.payload) {
+                    actives.retain(|a| a.threat.id != event.id);
                 }
                 continue;
             }
         }
-        t += dt;
+        // Accelerated sim time: threats, spawns and movement run `time_scale`×
+        // faster in real time. `ticks` stays real (drives the publish cadence).
+        let sdt = dt * config.time_scale.max(0.0);
+        t += sdt;
         ticks += 1;
 
         if t - last_swarm_t >= config.spawn_interval_s && actives.len() < config.max_active {
@@ -100,19 +104,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             active.threat.position = active
                 .threat
                 .position
-                .step_toward(&active.target, active.threat.speed * dt);
+                .step_toward(&active.target, active.threat.speed * sdt);
         }
 
+        let mut leaked: Vec<Threat> = Vec::new();
         actives.retain(|active| {
             let reached = active.threat.position.distance(&active.target) < IMPACT_RADIUS;
             if reached {
                 println!(
-                    "[{t:6.1}s] threat {} reached impact point — LEAKER",
+                    "[{t:6.1}s] threat {} reached impact point — LEAKER{}",
                     short(&active.threat.id),
+                    if active.threat.is_decoy { " (decoy)" } else { " (REAL)" },
                 );
+                leaked.push(active.threat.clone());
             }
             !reached
         });
+        for threat in &leaked {
+            if let Ok(payload) = serde_json::to_vec(threat) {
+                let _ = client.publish(LEAKER_EVENT, payload.into()).await;
+            }
+        }
 
         if ticks.is_multiple_of(PUBLISH_EVERY_TICKS) {
             let threats: Vec<&Threat> = actives.iter().map(|a| &a.threat).collect();

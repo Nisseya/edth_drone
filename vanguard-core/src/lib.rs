@@ -12,7 +12,8 @@ pub use subjects::*;
 
 pub use control::{
     CONTROL_RESET, ENGAGEMENTS, Engagement, EngagementReport, FlyingInterceptor, INTERCEPTORS,
-    MAP_CONFIG, MapConfig, PLATFORM_ADD, PLATFORM_REMOVE, PlatformSpec, THREAT_DESTROYED,
+    LEAKER_EVENT, MAP_CONFIG, MapConfig, PLATFORM_ADD, PLATFORM_REMOVE, PlatformSpec,
+    THREAT_DESTROYED, ThreatDestroyed,
 };
 pub use events::{Assignment, Message};
 pub use interceptor::{

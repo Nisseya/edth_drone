@@ -9,9 +9,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use futures::StreamExt;
 use uuid::Uuid;
 use vanguard_core::{
-    CONTROL_RESET, ENGAGEMENTS, EngagementReport, INTERCEPTORS, PLATFORM_ADD, PLATFORM_REMOVE,
-    PlatformSpec, Position, Radar, THREAT_DESTROYED, THREATS_SUBJECT, Threat, ThreatClassification,
-    report_subject,
+    CONTROL_RESET, ENGAGEMENTS, EngagementReport, INTERCEPTORS, MAP_CONFIG, MapConfig, PLATFORM_ADD,
+    PLATFORM_REMOVE, PlatformSpec, Position, Radar, THREAT_DESTROYED, THREATS_SUBJECT, Threat,
+    ThreatClassification, ThreatDestroyed, report_subject,
 };
 
 use crate::engagement::Engagements;
@@ -36,11 +36,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut add_sub = client.subscribe(PLATFORM_ADD).await?;
     let mut remove_sub = client.subscribe(PLATFORM_REMOVE).await?;
     let mut reset_sub = client.subscribe(CONTROL_RESET).await?;
+    let mut config_sub = client.subscribe(MAP_CONFIG).await?;
     println!("control host online via {nats_url}");
 
     let mut radars = preset_radars(classification_range);
     let mut engagements = Engagements::default();
     let mut last_ms = 0u64;
+    let mut time_scale = 1.0_f64;
 
     loop {
         tokio::select! {
@@ -77,9 +79,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
 
                 // Fly interceptors, resolve impacts, assign new shots.
-                for tid in engagements.step(&radars, &threats, &engageable, dt) {
+                let by_id: HashMap<Uuid, &Threat> = threats.iter().map(|t| (t.id, t)).collect();
+                for tid in engagements.step(&radars, &threats, &engageable, dt, time_scale) {
                     println!("NEUTRALIZED {} (total {})", &tid.to_string()[..8], engagements.neutralized);
-                    let _ = client.publish(THREAT_DESTROYED, tid.to_string().into()).await;
+                    let position = by_id.get(&tid).map(|t| t.position.clone()).unwrap_or(Position { x: 0.0, y: 0.0 });
+                    let event = ThreatDestroyed { id: tid, position };
+                    if let Ok(payload) = serde_json::to_vec(&event) {
+                        let _ = client.publish(THREAT_DESTROYED, payload.into()).await;
+                    }
                 }
 
                 // Publish the firing picture + in-flight interceptors.
@@ -113,10 +120,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
 
+            Some(msg) = config_sub.next() => {
+                if let Ok(cfg) = serde_json::from_slice::<MapConfig>(&msg.payload) {
+                    time_scale = cfg.time_scale.max(0.0);
+                }
+            }
+
             Some(_) = reset_sub.next() => {
                 println!("reset — restoring Kyiv preset");
                 radars = preset_radars(classification_range);
                 engagements.reset();
+                time_scale = 1.0;
             }
         }
     }

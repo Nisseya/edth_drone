@@ -27,6 +27,8 @@ interface TacticalMapProps {
   engagements: { platform_id: string; threat_id: string }[]
   /** Interceptors currently in flight (id + position) to animate. */
   interceptors: { id: string; position: Position }[]
+  /** Impact bursts to play once (kill = cyan, real impact = red). */
+  bursts: { key: number; position: Position; kind: 'kill' | 'impact' }[]
 }
 
 const BASE_STYLE: StyleSpecification = {
@@ -82,6 +84,7 @@ export function TacticalMap({
   preview,
   engagements,
   interceptors,
+  bursts,
 }: TacticalMapProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<maplibregl.Map | null>(null)
@@ -103,6 +106,10 @@ export function TacticalMap({
     interceptors: { id: string; position: Position }[]
   }>({ threats: [], platforms: [], engagements: [], interceptors: [] })
   const intTrailsRef = useRef(new Map<string, [number, number][]>())
+  // Active impact bursts: key → {position, kind, start ms}.
+  const burstsRef = useRef(new Map<number, { position: Position; kind: string; start: number }>())
+  // Highest burst key already played — bursts are monotonic, so each plays once.
+  const lastBurstKey = useRef(-1)
   const [ready, setReady] = useState(false)
 
   useEffect(() => {
@@ -222,6 +229,21 @@ export function TacticalMap({
         },
       })
 
+      // Impact bursts: expanding fading rings (cyan = kill, red = real impact).
+      map.addSource('bursts', { type: 'geojson', data: empty() })
+      map.addLayer({
+        id: 'bursts',
+        type: 'circle',
+        source: 'bursts',
+        paint: {
+          'circle-radius': ['get', 'r'],
+          'circle-color': 'transparent',
+          'circle-stroke-color': ['get', 'color'],
+          'circle-stroke-width': 2.5,
+          'circle-stroke-opacity': ['get', 'op'],
+        },
+      })
+
       // Interceptor trails (cyan comet tail behind each munition in flight).
       map.addSource('int-trails', { type: 'geojson', data: empty() })
       map.addLayer({
@@ -256,6 +278,19 @@ export function TacticalMap({
     map.setLayoutProperty('satellite', 'visibility', sat ? 'visible' : 'none')
     map.setLayoutProperty('sat-dim', 'visibility', sat ? 'visible' : 'none')
   }, [basemap, ready])
+
+  // Register only bursts not yet played (key strictly above the last seen),
+  // so re-renders of the capped `bursts` array don't replay old ones.
+  useEffect(() => {
+    let maxKey = lastBurstKey.current
+    for (const b of bursts) {
+      if (b.key > lastBurstKey.current) {
+        burstsRef.current.set(b.key, { position: b.position, kind: b.kind, start: performance.now() })
+      }
+      if (b.key > maxKey) maxKey = b.key
+    }
+    lastBurstKey.current = maxKey
+  }, [bursts])
 
   // Live reach preview while placing a platform.
   useEffect(() => {
@@ -423,95 +458,82 @@ export function TacticalMap({
     if (!map || !ready) return
 
     let raf = 0
+    let lastFrame = 0
+    let lastGeo = 0
+
     const frame = () => {
+      raf = requestAnimationFrame(frame)
+      const tp = performance.now()
+      if (tp - lastFrame < 33) return // cap marker movement at ~30 fps
+      lastFrame = tp
+
       const { start, dur } = segRef.current
-      const k = dur > 0 ? Math.min(1, (performance.now() - start) / dur) : 1
+      const k = dur > 0 ? Math.min(1, (tp - start) / dur) : 1
       const { threats, platforms, engagements, interceptors } = loopDataRef.current
       const markers = markersRef.current
-      const now = Date.now()
 
+      // Move markers smoothly (cheap DOM transforms).
       for (const threat of threats) {
         const seg = animRef.current.get(threat.id)
         if (!seg) continue
-        const cur: Position = {
-          x: seg.from.x + (seg.to.x - seg.from.x) * k,
-          y: seg.from.y + (seg.to.y - seg.from.y) * k,
-        }
+        const cur = lerp(seg, k)
         curRef.current.set(threat.id, cur)
         markers.get(`t:${threat.id}`)?.setLngLat(toLngLat(cur))
       }
-
-      // Interceptors: interpolate position, move marker, grow comet trail.
-      const trailFeatures = []
       for (const it of interceptors) {
         const seg = animRef.current.get(it.id)
         if (!seg) continue
-        const cur: Position = {
-          x: seg.from.x + (seg.to.x - seg.from.x) * k,
-          y: seg.from.y + (seg.to.y - seg.from.y) * k,
-        }
+        const cur = lerp(seg, k)
         curRef.current.set(it.id, cur)
         markers.get(`i:${it.id}`)?.setLngLat(toLngLat(cur))
-
         const trail = intTrailsRef.current.get(it.id) ?? []
         trail.push(toLngLat(cur))
-        if (trail.length > 40) trail.shift()
+        if (trail.length > 24) trail.shift()
         intTrailsRef.current.set(it.id, trail)
-        if (trail.length > 1) {
-          trailFeatures.push({
-            type: 'Feature' as const,
-            geometry: { type: 'LineString' as const, coordinates: trail },
-            properties: {},
-          })
-        }
       }
-      ;(map.getSource('int-trails') as GeoJSONSource | undefined)?.setData({
-        type: 'FeatureCollection',
-        features: trailFeatures,
-      })
+
+      // Rebuild the GeoJSON overlays at ~10 fps (heavy; not needed every frame).
+      if (tp - lastGeo < 100) return
+      lastGeo = tp
+      const now = Date.now()
+
+      const trailFeatures = [...intTrailsRef.current.values()]
+        .filter((t) => t.length > 1)
+        .map((t) => line(t))
+      setSource(map, 'int-trails', trailFeatures)
 
       const links = platforms.flatMap(({ report, lastSeen }) =>
         now - lastSeen > STALE_AFTER_MS
           ? []
-          : report.threats.map((contact) => ({
-              type: 'Feature' as const,
-              geometry: {
-                type: 'LineString' as const,
-                coordinates: [
-                  toLngLat(report.position),
-                  toLngLat(curRef.current.get(contact.id) ?? contact.position),
-                ],
-              },
-              properties: {},
-            })),
+          : report.threats.map((c) =>
+              line([toLngLat(report.position), toLngLat(curRef.current.get(c.id) ?? c.position)]),
+            ),
       )
+      setSource(map, 'links', links)
 
-      ;(map.getSource('links') as GeoJSONSource | undefined)?.setData({
-        type: 'FeatureCollection',
-        features: links,
-      })
-
-      // Firing lines: platform → engaged threat (interpolated positions).
       const platformPos = new Map(platforms.map((p) => [p.report.platform_id, p.report.position]))
       const engLines = engagements.flatMap((e) => {
         const from = platformPos.get(e.platform_id)
         const to = curRef.current.get(e.threat_id)
-        return from && to
-          ? [
-              {
-                type: 'Feature' as const,
-                geometry: { type: 'LineString' as const, coordinates: [toLngLat(from), toLngLat(to)] },
-                properties: {},
-              },
-            ]
-          : []
+        return from && to ? [line([toLngLat(from), toLngLat(to)])] : []
       })
-      ;(map.getSource('engagements') as GeoJSONSource | undefined)?.setData({
-        type: 'FeatureCollection',
-        features: engLines,
-      })
+      setSource(map, 'engagements', engLines)
 
-      raf = requestAnimationFrame(frame)
+      const burstFeatures = []
+      for (const [key, b] of burstsRef.current) {
+        const age = tp - b.start
+        if (age >= 700) {
+          burstsRef.current.delete(key)
+          continue
+        }
+        const p = age / 700
+        burstFeatures.push({
+          type: 'Feature' as const,
+          geometry: { type: 'Point' as const, coordinates: toLngLat(b.position) },
+          properties: { r: 8 + p * 46, op: 1 - p, color: b.kind === 'impact' ? '#ff3b4d' : '#7df9ff' },
+        })
+      }
+      setSource(map, 'bursts', burstFeatures)
     }
     raf = requestAnimationFrame(frame)
     return () => cancelAnimationFrame(raf)
@@ -524,4 +546,26 @@ export function TacticalMap({
 
 function empty(): FeatureCollection {
   return { type: 'FeatureCollection', features: [] }
+}
+
+function lerp(seg: { from: Position; to: Position }, k: number): Position {
+  return {
+    x: seg.from.x + (seg.to.x - seg.from.x) * k,
+    y: seg.from.y + (seg.to.y - seg.from.y) * k,
+  }
+}
+
+function line(coordinates: [number, number][]) {
+  return {
+    type: 'Feature' as const,
+    geometry: { type: 'LineString' as const, coordinates },
+    properties: {},
+  }
+}
+
+function setSource(map: maplibregl.Map, id: string, features: object[]) {
+  ;(map.getSource(id) as GeoJSONSource | undefined)?.setData({
+    type: 'FeatureCollection',
+    features: features as FeatureCollection['features'],
+  })
 }

@@ -12,6 +12,9 @@ pub struct MapConfig {
     pub spawn_interval_s: f64,
     pub zone_radius: f64,
     pub max_active: usize,
+    /// Simulation speed multiplier (1.0 = real time). Accelerates threats,
+    /// spawns and interceptors together so the engagement stays consistent.
+    pub time_scale: f64,
 }
 
 impl Default for MapConfig {
@@ -23,6 +26,7 @@ impl Default for MapConfig {
             spawn_interval_s: 45.0,
             zone_radius: 6_000.0,
             max_active: 40,
+            time_scale: 1.0,
         }
     }
 }
@@ -47,8 +51,17 @@ pub const PLATFORM_REMOVE: &str = "control.platform.remove";
 /// platforms, cleared threats). Payload is ignored.
 pub const CONTROL_RESET: &str = "control.reset";
 
-/// Host → map: a threat was neutralised (payload = threat id string).
+/// Host → map + UI: a threat was neutralised (payload = `ThreatDestroyed`).
 pub const THREAT_DESTROYED: &str = "control.threat.destroyed";
+/// Map → UI: a threat reached its impact point (payload = the `Threat`).
+pub const LEAKER_EVENT: &str = "control.leaker";
+
+/// A neutralised threat, with the position where it was killed.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ThreatDestroyed {
+    pub id: Uuid,
+    pub position: Position,
+}
 /// Host → UI: current firing picture (who engages what + kill count).
 pub const ENGAGEMENTS: &str = "control.engagements";
 /// Host → UI: positions of interceptors currently in flight.

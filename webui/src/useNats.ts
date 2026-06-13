@@ -4,44 +4,57 @@ import {
   CONTROL_RESET_SUBJECT,
   ENGAGEMENTS_SUBJECT,
   INTERCEPTORS_SUBJECT,
+  LEAKER_SUBJECT,
   PLATFORM_REMOVE_SUBJECT,
+  THREAT_DESTROYED_SUBJECT,
+  type Burst,
   type EngagementReport,
+  type FeedEvent,
   type FlyingInterceptor,
   type InterceptorReport,
   type PlatformView,
   type Threat,
   type ThreatClassification,
+  type ThreatDestroyed,
 } from './types'
 
 const REMOVE_GRACE_MS = 3_000
+// Coalesce the high-frequency feeds into React state at this cadence instead of
+// on every NATS message (4 Hz × ~9 platforms ≈ 50 msg/s would re-render that often).
+const FLUSH_MS = 150
 
 export type ConnectionStatus = 'connecting' | 'connected' | 'offline'
 
 const NATS_WS_URL = 'ws://127.0.0.1:8080'
 
 /**
- * Connects to the NATS WebSocket listener and keeps the live picture:
- * ground-truth threats from `map.threats`, latest radar report per platform
- * from `platform.*.report`.
+ * Connects to the NATS WebSocket listener and keeps the live picture. Incoming
+ * high-rate messages are buffered in refs and flushed to React state at a
+ * bounded cadence; rare events (kills, impacts) update state immediately.
  */
 export function useNats(url: string = NATS_WS_URL) {
   const [status, setStatus] = useState<ConnectionStatus>('connecting')
   const [threats, setThreats] = useState<Threat[]>([])
   const [platforms, setPlatforms] = useState<Map<string, PlatformView>>(new Map())
-  // Operator picture: best classification known per track id, fused across
-  // platform reports. A track stays out of this map until a platform resolves
-  // it within its classification range.
-  const [classifications, setClassifications] = useState<Map<string, ThreatClassification>>(
-    new Map(),
-  )
+  const [classifications, setClassifications] = useState<Map<string, ThreatClassification>>(new Map())
   const [engagements, setEngagements] = useState<EngagementReport>({ lines: [], neutralized: 0 })
   const [interceptors, setInterceptors] = useState<FlyingInterceptor[]>([])
+  const [feed, setFeed] = useState<FeedEvent[]>([])
+  const [bursts, setBursts] = useState<Burst[]>([])
+  const [impacts, setImpacts] = useState(0)
+
   const connectionRef = useRef<NatsConnection | undefined>(undefined)
-  // Platforms just removed — ignore any in-flight report for them briefly so
-  // they don't flicker back before the host stops publishing.
+  const eventKey = useRef(0)
   const recentlyRemoved = useRef<Map<string, number>>(new Map())
 
-  // Publish a JSON command (config / platform add / remove) to the Rust side.
+  // Buffers for the high-rate feeds + a dirty flag driving the flush.
+  const threatsRef = useRef<Threat[]>([])
+  const platformsRef = useRef<Map<string, PlatformView>>(new Map())
+  const classRef = useRef<Map<string, ThreatClassification>>(new Map())
+  const engagementsRef = useRef<EngagementReport>({ lines: [], neutralized: 0 })
+  const interceptorsRef = useRef<FlyingInterceptor[]>([])
+  const dirty = useRef(false)
+
   const publish = useCallback((subject: string, payload: unknown) => {
     const data = new TextEncoder().encode(
       typeof payload === 'string' ? payload : JSON.stringify(payload),
@@ -49,19 +62,29 @@ export function useNats(url: string = NATS_WS_URL) {
     connectionRef.current?.publish(subject, data)
   }, [])
 
-  // Remove a platform: tell the host and drop it from the UI immediately.
   const removePlatform = useCallback(
     (platformId: string) => {
       recentlyRemoved.current.set(platformId, Date.now())
       publish(PLATFORM_REMOVE_SUBJECT, platformId)
-      setPlatforms((previous) => {
-        const next = new Map(previous)
-        next.delete(platformId)
-        return next
-      })
+      platformsRef.current.delete(platformId)
+      dirty.current = true
     },
     [publish],
   )
+
+  // Flush buffered state to React at a bounded rate.
+  useEffect(() => {
+    const id = setInterval(() => {
+      if (!dirty.current) return
+      dirty.current = false
+      setThreats(threatsRef.current)
+      setPlatforms(new Map(platformsRef.current))
+      setClassifications(new Map(classRef.current))
+      setEngagements(engagementsRef.current)
+      setInterceptors(interceptorsRef.current)
+    }, FLUSH_MS)
+    return () => clearInterval(id)
+  }, [])
 
   useEffect(() => {
     let connection: NatsConnection | undefined
@@ -70,11 +93,7 @@ export function useNats(url: string = NATS_WS_URL) {
 
     ;(async () => {
       try {
-        connection = await connect({
-          servers: url,
-          maxReconnectAttempts: -1,
-          waitOnFirstConnect: true,
-        })
+        connection = await connect({ servers: url, maxReconnectAttempts: -1, waitOnFirstConnect: true })
       } catch {
         if (!cancelled) setStatus('offline')
         return
@@ -97,53 +116,70 @@ export function useNats(url: string = NATS_WS_URL) {
       void (async () => {
         for await (const message of connection.subscribe('map.threats')) {
           const live = JSON.parse(decoder.decode(message.data)) as Threat[]
-          setThreats(live)
-          // Drop classifications for tracks that no longer exist.
+          threatsRef.current = live
           const liveIds = new Set(live.map((t) => t.id))
-          setClassifications((previous) => {
-            const next = new Map(previous)
-            for (const id of next.keys()) if (!liveIds.has(id)) next.delete(id)
-            return next
-          })
+          for (const id of classRef.current.keys()) if (!liveIds.has(id)) classRef.current.delete(id)
+          dirty.current = true
         }
       })()
 
       void (async () => {
         for await (const message of connection.subscribe(ENGAGEMENTS_SUBJECT)) {
-          setEngagements(JSON.parse(decoder.decode(message.data)) as EngagementReport)
+          engagementsRef.current = JSON.parse(decoder.decode(message.data)) as EngagementReport
+          dirty.current = true
         }
       })()
 
       void (async () => {
         for await (const message of connection.subscribe(INTERCEPTORS_SUBJECT)) {
-          setInterceptors(JSON.parse(decoder.decode(message.data)) as FlyingInterceptor[])
+          interceptorsRef.current = JSON.parse(decoder.decode(message.data)) as FlyingInterceptor[]
+          dirty.current = true
         }
       })()
 
       void (async () => {
         for await (const message of connection.subscribe('platform.*.report')) {
           const report = JSON.parse(decoder.decode(message.data)) as InterceptorReport
-          // Skip reports for a just-removed platform during the grace window.
           const removedAt = recentlyRemoved.current.get(report.platform_id)
           if (removedAt !== undefined) {
             if (Date.now() - removedAt < REMOVE_GRACE_MS) continue
             recentlyRemoved.current.delete(report.platform_id)
           }
-          setPlatforms((previous) => {
-            const next = new Map(previous)
-            next.set(report.platform_id, { report, lastSeen: Date.now() })
-            return next
-          })
-          // Record any definitive classification (a closer platform resolves it).
-          setClassifications((previous) => {
-            const next = new Map(previous)
-            for (const contact of report.threats) {
-              if (contact.classification !== 'Unknown') {
-                next.set(contact.id, contact.classification)
-              }
+          platformsRef.current.set(report.platform_id, { report, lastSeen: Date.now() })
+          for (const contact of report.threats) {
+            if (contact.classification !== 'Unknown') {
+              classRef.current.set(contact.id, contact.classification)
             }
-            return next
-          })
+          }
+          dirty.current = true
+        }
+      })()
+
+      // --- Rare events: update state immediately for snappy feedback.
+      const clock = () => new Date().toISOString().slice(11, 19)
+      const pushFeed = (event: FeedEvent) => setFeed((prev) => [event, ...prev].slice(0, 14))
+      const pushBurst = (burst: Burst) => setBursts((prev) => [...prev, burst].slice(-30))
+
+      void (async () => {
+        for await (const message of connection.subscribe(THREAT_DESTROYED_SUBJECT)) {
+          const d = JSON.parse(decoder.decode(message.data)) as ThreatDestroyed
+          const key = eventKey.current++
+          pushFeed({ key, time: clock(), kind: 'kill', text: `NEUTRALIZED ${d.id.slice(0, 8)}` })
+          pushBurst({ key, position: d.position, kind: 'kill' })
+        }
+      })()
+
+      void (async () => {
+        for await (const message of connection.subscribe(LEAKER_SUBJECT)) {
+          const t = JSON.parse(decoder.decode(message.data)) as Threat
+          const key = eventKey.current++
+          if (t.is_decoy) {
+            pushFeed({ key, time: clock(), kind: 'decoy', text: `decoy spent ${t.id.slice(0, 8)}` })
+          } else {
+            setImpacts((n) => n + 1)
+            pushFeed({ key, time: clock(), kind: 'impact', text: `⚠ IMPACT ${t.id.slice(0, 8)} @ KYIV` })
+            pushBurst({ key, position: t.position, kind: 'impact' })
+          }
         }
       })()
     })()
@@ -155,15 +191,21 @@ export function useNats(url: string = NATS_WS_URL) {
     }
   }, [url])
 
-  // Reset to baseline: tell the Rust side and clear the local picture so it
-  // repopulates from the preset feeds.
   const reset = useCallback(() => {
     publish(CONTROL_RESET_SUBJECT, '')
+    threatsRef.current = []
+    platformsRef.current = new Map()
+    classRef.current = new Map()
+    engagementsRef.current = { lines: [], neutralized: 0 }
+    interceptorsRef.current = []
     setThreats([])
     setPlatforms(new Map())
     setClassifications(new Map())
     setEngagements({ lines: [], neutralized: 0 })
     setInterceptors([])
+    setFeed([])
+    setBursts([])
+    setImpacts(0)
   }, [publish])
 
   return {
@@ -173,6 +215,9 @@ export function useNats(url: string = NATS_WS_URL) {
     classifications,
     engagements,
     interceptors,
+    feed,
+    bursts,
+    impacts,
     publish,
     removePlatform,
     reset,

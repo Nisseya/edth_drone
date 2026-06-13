@@ -97,6 +97,9 @@ export default function App() {
     classifications,
     engagements,
     interceptors,
+    feed,
+    bursts,
+    impacts,
     publish,
     removePlatform,
     reset,
@@ -163,6 +166,9 @@ export default function App() {
             NEUTRALIZED <span className="font-bold text-cyan-300">{engagements.neutralized}</span>
           </span>
           <span>
+            IMPACTS <span className={`font-bold ${impacts > 0 ? 'text-red-500' : 'text-slate-500'}`}>{impacts}</span>
+          </span>
+          <span>
             PLATFORMS <span className="font-bold text-emerald-400">{platformList.length}</span>
           </span>
           <button
@@ -188,6 +194,7 @@ export default function App() {
             preview={pending ? { position: pending, reach: previewReach } : null}
             engagements={engagements.lines}
             interceptors={interceptors}
+            bursts={bursts}
           />
         </main>
 
@@ -203,6 +210,31 @@ export default function App() {
             clearPending={() => setPending(null)}
             onReachChange={setPreviewReach}
           />
+
+          <section>
+            <h2 className="mb-1 text-[10px] font-bold tracking-[0.3em] text-cyan-400/80">
+              EVENT FEED
+            </h2>
+            <div className="flex max-h-40 flex-col gap-0.5 overflow-y-auto">
+              {feed.length === 0 && <p className="text-[11px] text-slate-600">No events.</p>}
+              {feed.map((e) => (
+                <div key={e.key} className="flex gap-2 text-[11px]">
+                  <span className="text-slate-600">{e.time}</span>
+                  <span
+                    className={
+                      e.kind === 'kill'
+                        ? 'text-cyan-300'
+                        : e.kind === 'impact'
+                          ? 'font-bold text-red-400'
+                          : 'text-slate-500'
+                    }
+                  >
+                    {e.text}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </section>
 
           <section>
             <h2 className="mb-2 text-[10px] font-bold tracking-[0.3em] text-emerald-400/80">

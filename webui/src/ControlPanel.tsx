@@ -119,6 +119,9 @@ export function ControlPanel({
       </div>
 
       <div className="flex flex-col gap-2">
+        <Slider label="TIME" value={cfg.time_scale} min={1} max={10} step={1}
+          fmt={(v) => `${v}×`}
+          onChange={(v) => pushConfig({ ...cfg, time_scale: v })} />
         <Slider label="DECOY RATIO" value={cfg.decoy_ratio} min={0} max={1} step={0.05}
           fmt={(v) => `${Math.round(v * 100)}%`}
           onChange={(v) => pushConfig({ ...cfg, decoy_ratio: v })} />

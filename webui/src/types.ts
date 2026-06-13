@@ -16,6 +16,7 @@ export interface Threat {
   position: Position
   speed: number
   threat_level: number
+  is_decoy: boolean
 }
 
 /** Mirror of vanguard_core::ThreatClassification. */
@@ -76,6 +77,7 @@ export interface MapConfig {
   spawn_interval_s: number
   zone_radius: number
   max_active: number
+  time_scale: number
 }
 
 export const DEFAULT_MAP_CONFIG: MapConfig = {
@@ -85,6 +87,7 @@ export const DEFAULT_MAP_CONFIG: MapConfig = {
   spawn_interval_s: 45,
   zone_radius: 6_000,
   max_active: 40,
+  time_scale: 1,
 }
 
 /** Mirror of vanguard_core::PlatformSpec. */
@@ -107,12 +110,35 @@ export const PLATFORM_REMOVE_SUBJECT = 'control.platform.remove'
 export const CONTROL_RESET_SUBJECT = 'control.reset'
 export const ENGAGEMENTS_SUBJECT = 'control.engagements'
 export const INTERCEPTORS_SUBJECT = 'control.interceptors'
+export const THREAT_DESTROYED_SUBJECT = 'control.threat.destroyed'
+export const LEAKER_SUBJECT = 'control.leaker'
 
 /** Mirror of vanguard_core::FlyingInterceptor. */
 export interface FlyingInterceptor {
   id: string
   position: Position
   target_id: string
+}
+
+/** Mirror of vanguard_core::ThreatDestroyed. */
+export interface ThreatDestroyed {
+  id: string
+  position: Position
+}
+
+/** A timeline entry for the event feed. */
+export interface FeedEvent {
+  key: number
+  time: string
+  kind: 'kill' | 'impact' | 'decoy'
+  text: string
+}
+
+/** A transient impact burst for the map to animate. */
+export interface Burst {
+  key: number
+  position: Position
+  kind: 'kill' | 'impact'
 }
 
 /** Mirror of vanguard_core::Engagement. */

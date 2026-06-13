@@ -101,8 +101,9 @@ cargo run -p vanguard-control
 cd webui && pnpm install && pnpm dev    # http://localhost:5173
 ```
 
-Le panneau **SIMULATION CONTROL** du dashboard pilote la map en direct (ratio de
-leurres, taille/cadence des vagues, rayon de zone, plafond), permet d'**ajouter une
+Le panneau **SIMULATION CONTROL** du dashboard pilote la map en direct (**accélération
+du temps** ×1–10, ratio de leurres, taille/cadence des vagues, rayon de zone, plafond),
+permet d'**ajouter une
 plateforme en cliquant sur la carte** (nom / portée / munitions), d'en retirer, et de
 **réinitialiser** (`↺ RESET`) au scénario de base. Tout passe par NATS : l'UI publie sur
 `control.map.config` / `control.platform.add` / `control.platform.remove` / `control.reset`.
@@ -123,6 +124,17 @@ Chaque tir lance un **vrai intercepteur** qui vole vers un **point d'interceptio
 ce point d'avance et impacte à la rencontre. Les positions des munitions en vol sont
 publiées sur `control.interceptors` ; le dashboard les anime (**darts cyan + traînée**),
 interpolées en fluide comme les menaces.
+
+### Retour visuel & métriques
+
+- **Burst d'impact** : un anneau qui s'étend à chaque kill (cyan) et à chaque impact réel
+  au sol (rouge), placé à la position exacte.
+- **Feed d'événements** (panneau latéral) : journal horodaté `NEUTRALIZED` / `⚠ IMPACT` /
+  `decoy spent`, façon ticker C2.
+- **Compteurs header** : `NEUTRALIZED` (menaces abattues) et **`IMPACTS`** (vrais drones qui
+  ont touché Kyiv — la métrique de dégâts ; les leurres qui passent ne comptent pas).
+- Le backend publie les kills sur `control.threat.destroyed` (avec position) et les fuites
+  sur `control.leaker` (avec `is_decoy`, pour distinguer impact réel vs leurre inoffensif).
 
 > Le binaire `vanguard-system-interceptor` (plateforme unique en CLI, option `--reach`)
 > reste disponible si tu préfères lancer des plateformes en process séparés.

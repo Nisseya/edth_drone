@@ -61,6 +61,7 @@ impl Engagements {
         threats: &[Threat],
         engageable: &HashSet<Uuid>,
         dt: f64,
+        time_scale: f64,
     ) -> Vec<Uuid> {
         self.sync(radars);
 
@@ -82,7 +83,10 @@ impl Engagements {
         self.last_pos = threats.iter().map(|t| (t.id, t.position.clone())).collect();
 
         let by_id: HashMap<Uuid, &Threat> = threats.iter().map(|t| (t.id, t)).collect();
-        let step = INTERCEPTOR_SPEED * dt;
+        // Interceptor speed scaled the same as the (accelerated) threats, so the
+        // predicted-intercept geometry stays consistent at any time scale.
+        let int_speed = INTERCEPTOR_SPEED * time_scale.max(0.0);
+        let step = int_speed * dt;
 
         // Fly in-flight interceptors toward their predicted intercept point.
         let mut destroyed = Vec::new();
@@ -99,7 +103,7 @@ impl Engagements {
                 eng.shot = None;
                 continue;
             }
-            let aim = predicted_intercept(&shot.position, INTERCEPTOR_SPEED, &threat.position, &v)
+            let aim = predicted_intercept(&shot.position, int_speed, &threat.position, &v)
                 .unwrap_or_else(|| threat.position.clone()); // fallback: pure pursuit
             shot.position = shot.position.step_toward(&aim, step);
         }
