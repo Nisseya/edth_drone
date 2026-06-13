@@ -125,6 +125,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let report = InterceptorReport {
             platform_id: platform.id,
+            name: platform.name.clone(),
+            position: platform.position.clone(),
+            range: platform.range,
             threats: contacts,
             interceptors_remaining: platform
                 .interceptors
