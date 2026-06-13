@@ -1,0 +1,16 @@
+[package]
+name = "vanguard-simulation"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1"
+tokio = { version = "1", features = ["full"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+async-nats = "0.42"
+
+vanguard-core = { path = "../vanguard-core" }
+vanguard-platform = { path = "../vanguard-platform" }
+vanguard-orchestrator = { path = "../vanguard-orchestrator" }

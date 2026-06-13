@@ -42,7 +42,7 @@ pub fn compute_assignments(
         assignments.push(Assignment {
             platform_id: interceptor.platform_id,
             interceptor_id: interceptor.interceptor.id,
-            track_id: track.track_id,
+            track_id: track.threat_id,
         });
     }
 

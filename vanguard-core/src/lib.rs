@@ -1,7 +1,10 @@
 pub mod events;
 pub mod interceptor;
 pub mod position;
+pub mod subjects;
 pub mod threat;
+
+pub use subjects::*;
 
 pub use events::{Assignment, Message};
 pub use interceptor::{

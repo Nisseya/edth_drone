@@ -40,7 +40,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         name: args.name,
         position,
         interceptors,
-        range: DETECTION_RANGE,
+        reach: DETECTION_RANGE,
         neighbor_platforms: Vec::new(),
     };
 
@@ -50,7 +50,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         platform.id,
         platform.position.x,
         platform.position.y,
-        platform.range,
+        platform.reach,
         platform.interceptors.len(),
     );
 
@@ -73,7 +73,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let threats: Vec<Threat> = match serde_json::from_slice(&message.payload) {
             Ok(threats) => threats,
             Err(error) => {
-                eprintln!("{} discarding invalid threat update: {error}", platform.name);
+                eprintln!(
+                    "{} discarding invalid threat update: {error}",
+                    platform.name
+                );
                 continue;
             }
         };
@@ -85,7 +88,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         for threat in &threats {
             let range = platform.position.distance(&threat.position);
-            if range > platform.range {
+            if range > platform.reach {
                 continue;
             }
 
@@ -96,7 +99,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     short(&threat.id),
                     threat.position.x,
                     threat.position.y,
-                    range,
+                    reach,
                 );
             }
 
@@ -139,7 +142,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             platform_id: platform.id,
             name: platform.name.clone(),
             position: platform.position.clone(),
-            range: platform.range,
+            range: platform.reach,
             threats: contacts,
             interceptors_remaining: platform
                 .interceptors
@@ -151,7 +154,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         match serde_json::to_vec(&report) {
             Ok(payload) => {
-                if let Err(error) = client.publish(reports_subject.clone(), payload.into()).await {
+                if let Err(error) = client
+                    .publish(reports_subject.clone(), payload.into())
+                    .await
+                {
                     eprintln!("{} failed to publish report: {error}", platform.name);
                 }
             }

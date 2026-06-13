@@ -9,7 +9,7 @@ pub struct PlatformInterceptor {
     pub name: String,
     pub position: Position,
     pub interceptors: Vec<Interceptor>,
-    pub range: f64,
+    pub reach: f64,
     pub neighbor_platforms: Vec<NeighborPlatform>,
 }
 
@@ -17,6 +17,7 @@ pub struct PlatformInterceptor {
 pub struct NeighborPlatform {
     pub id: Uuid,
     pub position: Position,
+    pub reach: f64,
     pub interceptors_remaining: usize,
 }
 
@@ -42,7 +43,7 @@ pub struct InterceptorReport {
     pub platform_id: Uuid,
     pub name: String,
     pub position: Position,
-    pub range: f64,
+    pub reach: f64,
     pub threats: Vec<DetectedThreat>,
     pub interceptors_remaining: usize,
     pub timestamp: u64,
@@ -74,11 +75,29 @@ pub enum ThreatClassification {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ThreatTrack {
-    pub track_id: Uuid,
+    pub threat_id: Uuid,
     pub position: Position,
     pub velocity: Speed,
     pub confidence: f64,
     pub threat_level: usize,
     pub last_update: f64,
     pub source_platforms: Vec<Uuid>,
+    pub status: TrackStatus,
+    pub engaged_by: Option<Uuid>,
+}
+
+impl ThreatTrack {
+    pub fn predict_position(&self, dt: f64) -> Position {
+        Position {
+            x: self.position.x + self.velocity.x * dt,
+            y: self.position.y + self.velocity.y * dt,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub enum TrackStatus {
+    Detected,
+    Engaged,
+    Destroyed,
 }

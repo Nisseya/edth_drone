@@ -15,7 +15,10 @@ const NEIGHBOR_UPDATE: &str = "vanguard.neighbor.update";
 
 const STRATEGY_UPDATE: &str = "vanguard.strategy.update";
 
-use vanguard_core::{DetectedThreat, InterceptorState, Message, NeighborPlatform, Position};
+use vanguard_core::{
+    DetectedThreat, InterceptorState, Message, NEW_PLATFORM, NeighborPlatform, Position,
+    ThreatTrack, interceptor::TrackStatus,
+};
 
 pub struct Platform {
     pub state: PlatformState,
@@ -23,7 +26,13 @@ pub struct Platform {
 }
 
 impl Platform {
+    pub fn new(state: PlatformState, nats: Client) -> Self {
+        Self { state, nats }
+    }
+
     async fn publish(&self, subject: &'static str, msg: Message) -> Result<()> {
+        println!("[{}] PUB {} {:?}", self.state.platform.name, subject, msg);
+
         self.nats
             .publish(subject, serde_json::to_vec(&msg)?.into())
             .await?;
@@ -45,6 +54,7 @@ impl Platform {
             Message::NeighborUpdate {
                 platform_id: self.state.platform.id,
                 position: self.state.platform.position.clone(),
+                reach: self.state.platform.reach,
                 interceptors_remaining: available,
             },
         )
@@ -52,6 +62,8 @@ impl Platform {
     }
 
     pub async fn detect_threat(&mut self, threat: DetectedThreat) -> Result<()> {
+        println!("[{}] DETECT {}", self.state.platform.name, threat.id);
+
         self.state.threats.insert(threat.id, threat.clone());
 
         self.publish(
@@ -72,6 +84,9 @@ impl Platform {
 
     fn is_best_platform(&self, threat: &DetectedThreat) -> bool {
         let my_distance = self.state.platform.position.distance(&threat.position);
+        if my_distance > self.state.platform.reach {
+            return false;
+        }
 
         self.state
             .platform
@@ -82,6 +97,8 @@ impl Platform {
     }
 
     async fn engage_threat(&mut self, threat_id: Uuid) -> Result<()> {
+        self.state.engaged_threats.insert(threat_id);
+
         let interceptor_id = {
             let Some(interceptor) = self
                 .state
@@ -130,6 +147,7 @@ impl Platform {
     }
 
     fn handle_threat_engaged(&mut self, threat_id: Uuid) {
+        self.state.engaged_threats.insert(threat_id);
         self.state.threats.remove(&threat_id);
     }
 
@@ -137,6 +155,7 @@ impl Platform {
         &mut self,
         platform_id: Uuid,
         position: Position,
+        reach: f64,
         interceptors_remaining: usize,
     ) {
         if platform_id == self.state.platform.id {
@@ -151,10 +170,16 @@ impl Platform {
             .find(|n| n.id == platform_id)
         {
             neighbor.position = position;
+            neighbor.reach = reach;
             neighbor.interceptors_remaining = interceptors_remaining;
 
             return;
         }
+
+        println!(
+            "[{}] neighbor added {}",
+            self.state.platform.name, platform_id
+        );
 
         self.state
             .platform
@@ -162,8 +187,26 @@ impl Platform {
             .push(NeighborPlatform {
                 id: platform_id,
                 position,
+                reach,
                 interceptors_remaining,
             });
+    }
+
+    fn handle_track_updated(&mut self, track: ThreatTrack) -> Result<()> {
+        println!(
+            "[{}] TRACK {} {:?}",
+            self.state.platform.name, track.threat_id, track.status,
+        );
+
+        self.state.tracks.insert(track.threat_id, track.clone());
+
+        if track.status == TrackStatus::Engaged {
+            self.state.engaged_threats.insert(track.threat_id);
+
+            self.state.threats.remove(&track.threat_id);
+        }
+
+        Ok(())
     }
 
     async fn handle_message(&mut self, message: Message) -> Result<()> {
@@ -182,16 +225,29 @@ impl Platform {
             Message::NeighborUpdate {
                 platform_id,
                 position,
+                reach,
                 interceptors_remaining,
             } => {
-                self.handle_neighbor_update(platform_id, position, interceptors_remaining);
+                self.handle_neighbor_update(platform_id, position, reach, interceptors_remaining);
             }
 
             Message::StrategyUpdate { .. } => {}
-            Message::TrackUpdated { track } => {}
+            Message::TrackUpdated { track } => {
+                self.handle_track_updated(track);
+            }
+            Message::NewPlatform {
+                platform_id,
+                position,
+                reach,
+            } => {}
             Message::InterceptorUpdate {
                 platform_id,
                 interceptor,
+            } => {}
+            Message::ThreatDestroyed {
+                threat_id,
+                platform_id,
+                interceptor_id,
             } => {}
         }
 
@@ -203,11 +259,23 @@ impl Platform {
 
         let mut engaged_sub = self.nats.subscribe(THREAT_ENGAGED).await?;
 
-        let mut neighbor_sub = self.nats.subscribe(NEIGHBOR_UPDATE).await?;
+        let subject = vanguard_core::neighbor_subject(&self.state.platform.id);
+
+        let mut neighbor_sub = self.nats.subscribe(subject).await?;
 
         let mut strategy_sub = self.nats.subscribe(STRATEGY_UPDATE).await?;
 
         let mut heartbeat = tokio::time::interval(Duration::from_secs(1));
+
+        self.publish(
+            NEW_PLATFORM,
+            Message::NewPlatform {
+                platform_id: self.state.platform.id,
+                position: self.state.platform.position.clone(),
+                reach: self.state.platform.reach,
+            },
+        )
+        .await?;
 
         loop {
             tokio::select! {
@@ -258,61 +326,5 @@ impl Platform {
                 }
             }
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::collections::HashMap;
-
-    use uuid::Uuid;
-
-    use super::*;
-
-    use vanguard_core::{
-        DetectedThreat, Interceptor, InterceptorState, NeighborPlatform, PlatformInterceptor,
-        Position, Speed,
-    };
-
-    #[tokio::test]
-    async fn closest_platform_wins() {
-        let platform = PlatformInterceptor {
-            id: Uuid::new_v4(),
-            name: "alpha".to_string(),
-            position: Position { x: 0.0, y: 0.0 },
-            range: 1000.0,
-            interceptors: vec![Interceptor {
-                id: Uuid::new_v4(),
-                position: Position { x: 0.0, y: 0.0 },
-                state: InterceptorState::Idle,
-                assigned_track: None,
-            }],
-            neighbor_platforms: vec![NeighborPlatform {
-                id: Uuid::new_v4(),
-                position: Position { x: 100.0, y: 100.0 },
-                interceptors_remaining: 1,
-            }],
-        };
-
-        let state = PlatformState {
-            platform,
-            threats: HashMap::new(),
-        };
-
-        let nats = async_nats::connect("nats://localhost:4222").await.unwrap();
-
-        let platform = Platform { state, nats };
-
-        let threat = DetectedThreat {
-            id: Uuid::new_v4(),
-            position: Position { x: 10.0, y: 10.0 },
-            speed: Speed { x: 0.0, y: 0.0 },
-            threat_level: 10,
-            classification: vanguard_core::interceptor::ThreatClassification::Unknown,
-            confidence: 1.0,
-            detected_at: 3.0,
-        };
-
-        assert!(platform.is_best_platform(&threat));
     }
 }

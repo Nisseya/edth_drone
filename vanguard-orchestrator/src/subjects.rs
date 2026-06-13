@@ -10,3 +10,4 @@ pub const TRACK_UPDATED: &str = "vanguard.track.updated";
 
 pub const STRATEGY_UPDATE: &str = "vanguard.strategy.update";
 
+pub const WORLD_THREAT_DETECTED: &str = "world.threat.detected";

@@ -1,6 +1,7 @@
 use anyhow::Result;
 use async_nats::Client;
 use futures::StreamExt;
+use uuid::Uuid;
 
 use crate::{
     assignment::compute_assignments,
@@ -9,7 +10,9 @@ use crate::{
     tracks::{cleanup_tracks, update_track},
 };
 
-use vanguard_core::{Assignment, Message, NeighborPlatform};
+use vanguard_core::{
+    Assignment, DetectedThreat, Message, NEW_PLATFORM, NeighborPlatform, interceptor::TrackStatus,
+};
 
 pub struct Orchestrator {
     pub state: OrchestratorState,
@@ -25,6 +28,7 @@ impl Orchestrator {
     }
 
     async fn publish(&self, subject: &'static str, msg: Message) -> Result<()> {
+        println!("[{}] PUB {} {:?}", "Orchestrator", subject, msg);
         self.nats
             .publish(subject, serde_json::to_vec(&msg)?.into())
             .await?;
@@ -43,6 +47,9 @@ impl Orchestrator {
         let mut neighbor_sub = self.nats.subscribe(NEIGHBOR_UPDATE).await?;
 
         let mut interceptor_sub = self.nats.subscribe(INTERCEPTOR_UPDATE).await?;
+        let mut new_platform_sub = self.nats.subscribe(NEW_PLATFORM).await?;
+        let mut world_sub = self.nats.subscribe(WORLD_THREAT_DETECTED).await?;
+        let mut engaged_sub = self.nats.subscribe(THREAT_ENGAGED).await?;
 
         let mut heartbeat = tokio::time::interval(std::time::Duration::from_secs(1));
 
@@ -50,6 +57,22 @@ impl Orchestrator {
             tokio::select! {
 
                 _ = heartbeat.tick() => {
+
+                    for track in self.state.tracks.values_mut() {
+                        track.kalman.predict(1.0);
+
+                        let (x, y) =
+                            track.kalman.position();
+
+                        let (vx, vy) =
+                            track.kalman.velocity();
+
+                        track.track.position.x = x;
+                        track.track.position.y = y;
+
+                        track.track.velocity.x = vx;
+                        track.track.velocity.y = vy;
+                    }
 
                     cleanup_tracks(
                         &mut self.state.tracks,
@@ -60,7 +83,7 @@ impl Orchestrator {
                         self.state
                             .tracks
                             .values()
-                            .cloned()
+                            .map(|t| t.track.clone())
                             .collect::<Vec<_>>();
 
                     let interceptors =
@@ -69,6 +92,16 @@ impl Orchestrator {
                             .values()
                             .cloned()
                             .collect::<Vec<_>>();
+                    for track in self.state.tracks.values() {
+                        println!(
+                            "[KALMAN] {} pos=({:.1},{:.1}) vel=({:.1},{:.1})",
+                            track.track.threat_id,
+                            track.track.position.x,
+                            track.track.position.y,
+                            track.track.velocity.x,
+                            track.track.velocity.y,
+                        );
+                    }
 
                     let assignments =
                         compute_assignments(
@@ -112,30 +145,194 @@ impl Orchestrator {
                     }
                 }
 
-                Some(msg) =
-                    neighbor_sub.next() =>
-                {
+                Some(msg) = engaged_sub.next() => {
+
                     let msg: Message =
                         serde_json::from_slice(
                             &msg.payload
                         )?;
 
+                    if let Message::ThreatEngaged {
+                        threat_id,
+                        platform_id,
+                        ..
+                    } = msg {
+
+                        let updated_track =
+                            if let Some(track) =
+                                self.state.tracks.get_mut(&threat_id)
+                            {
+                                track.track.status =
+                                    TrackStatus::Engaged;
+
+                                track.track.engaged_by =
+                                    Some(platform_id);
+
+                                println!(
+                                    "[Orchestrator] Track {} engaged by {}",
+                                    threat_id,
+                                    platform_id
+                                );
+
+                                Some(track.track.clone())
+                            } else {
+                                None
+                            };
+
+                        if let Some(track) = updated_track {
+                            self.publish(
+                                TRACK_UPDATED,
+                                Message::TrackUpdated {
+                                    track,
+                                },
+                            )
+                            .await?;
+                        }
+                    }
+                }
+
+                Some(msg) = neighbor_sub.next() => {
+                    let msg: Message =
+                        serde_json::from_slice(&msg.payload)?;
+
                     if let Message::NeighborUpdate {
                         platform_id,
                         position,
+                        reach,
                         interceptors_remaining,
                     } = msg {
 
-                        self.state
+                        if let Some(platform) =
+                            self.state.platforms.get_mut(&platform_id)
+                        {
+                            platform.position = position;
+                            platform.interceptors_remaining =
+                                interceptors_remaining;
+                        }
+                    }
+                }
+
+                Some(msg) = world_sub.next() => {
+
+                    let threat: DetectedThreat =
+                        serde_json::from_slice(
+                            &msg.payload
+                        )?;
+
+                    println!(
+                        "[Orchestrator] WORLD threat {}",
+                        threat.id
+                    );
+
+                    let track =
+                        update_track(
+                            &mut self.state.tracks,
+                            threat.clone(),
+                            Uuid::nil(),
+                        );
+
+                    self.publish(
+                        TRACK_UPDATED,
+                        Message::TrackUpdated {
+                            track,
+                        },
+                    )
+                    .await?;
+
+                    self.publish(
+                        THREAT_DETECTED,
+                        Message::ThreatDetected {
+                            threat,
+                            source_platform: Uuid::nil(),
+                        },
+                    )
+                    .await?;
+                }
+
+                Some(msg) = new_platform_sub.next() => {
+
+                    let msg: Message =
+                        serde_json::from_slice(
+                            &msg.payload
+                        )?;
+
+                    if let Message::NewPlatform {
+                        platform_id,
+                        position,
+                        reach,
+                    } = msg {
+
+                        let neighbors: Vec<_> = self
+                            .state
                             .platforms
-                            .insert(
-                                platform_id,
-                                NeighborPlatform {
-                                    id: platform_id,
-                                    position,
-                                    interceptors_remaining,
-                                },
-                            );
+                            .values()
+                            .cloned()
+                            .filter(|other| {
+                                other.position.distance(&position)
+                                    <= (other.reach + reach) as f64
+                            })
+                            .collect();
+
+                        let new_platform =
+                            NeighborPlatform {
+                                id: platform_id,
+                                position: position.clone(),
+                                reach: reach,
+                                interceptors_remaining: 0,
+                            };
+
+                        self.state.platforms.insert(
+                            platform_id,
+                            new_platform,
+                        );
+
+                        for neighbor in neighbors {
+
+                            let msg =
+                                Message::NeighborUpdate {
+                                    platform_id,
+                                    position: position.clone(),
+                                    reach: reach,
+                                    interceptors_remaining: 0,
+                                };
+
+                            self.nats
+                                .publish(
+                                    vanguard_core::neighbor_subject(
+                                        &neighbor.id
+                                    ),
+                                    serde_json::to_vec(
+                                        &msg
+                                    )?
+                                    .into(),
+                                )
+                                .await?;
+
+                            let msg =
+                                Message::NeighborUpdate {
+                                    platform_id:
+                                        neighbor.id,
+                                    position:
+                                        neighbor.position,
+                                    reach:
+                                        neighbor.reach,
+                                    interceptors_remaining:
+                                        neighbor
+                                            .interceptors_remaining,
+                                };
+
+                            self.nats
+                                .publish(
+                                    vanguard_core::neighbor_subject(
+                                        &platform_id
+                                    ),
+                                    serde_json::to_vec(
+                                        &msg
+                                    )?
+                                    .into(),
+                                )
+                                .await?;
+                        }
                     }
                 }
 

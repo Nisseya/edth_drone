@@ -3,7 +3,7 @@ mod state;
 
 use platform::Platform;
 use state::PlatformState;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use async_nats::connect;
 use uuid::Uuid;
@@ -18,7 +18,7 @@ async fn main() -> anyhow::Result<()> {
         id: Uuid::new_v4(),
         name: "Alpha".to_string(),
         position: Position { x: 0.0, y: 0.0 },
-        range: 1000.0,
+        reach: 1000.0,
 
         interceptors: vec![
             Interceptor {
@@ -41,6 +41,8 @@ async fn main() -> anyhow::Result<()> {
     let state = PlatformState {
         platform,
         threats: HashMap::new(),
+        engaged_threats: HashSet::new(),
+        tracks: HashMap::new(),
     };
 
     let platform = Platform { state, nats };

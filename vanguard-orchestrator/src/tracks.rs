@@ -2,50 +2,76 @@ use std::collections::HashMap;
 
 use uuid::Uuid;
 
-use vanguard_core::{DetectedThreat, ThreatTrack};
+use crate::kalman::KalmanTrack;
+use crate::state::InternalTrack;
+
+use vanguard_core::{DetectedThreat, ThreatTrack, interceptor::TrackStatus};
 
 const MATCH_DISTANCE: f64 = 50.0;
 
 pub fn update_track(
-    tracks: &mut HashMap<Uuid, ThreatTrack>,
+    tracks: &mut HashMap<Uuid, InternalTrack>,
     threat: DetectedThreat,
     source_platform: Uuid,
 ) -> ThreatTrack {
-    for track in tracks.values_mut() {
-        if track.position.distance(&threat.position) < MATCH_DISTANCE {
-            track.position.x = (track.position.x + threat.position.x) / 2.0;
+    for internal in tracks.values_mut() {
+        let (x, y) = internal.kalman.position();
 
-            track.position.y = (track.position.y + threat.position.y) / 2.0;
+        let dx = x - threat.position.x;
+        let dy = y - threat.position.y;
 
-            track.velocity = threat.speed.clone();
+        if (dx * dx + dy * dy).sqrt() < MATCH_DISTANCE {
+            internal.kalman.update(threat.position.x, threat.position.y);
 
-            track.confidence = track.confidence.max(threat.confidence);
+            let (x, y) = internal.kalman.position();
 
-            track.last_update = threat.detected_at;
+            let (vx, vy) = internal.kalman.velocity();
 
-            if !track.source_platforms.contains(&source_platform) {
-                track.source_platforms.push(source_platform);
+            internal.track.position.x = x;
+            internal.track.position.y = y;
+
+            internal.track.velocity.x = vx;
+            internal.track.velocity.y = vy;
+
+            internal.track.confidence = internal.track.confidence.max(threat.confidence);
+
+            internal.track.last_update = threat.detected_at;
+
+            if !internal.track.source_platforms.contains(&source_platform) {
+                internal.track.source_platforms.push(source_platform);
             }
 
-            return track.clone();
+            return internal.track.clone();
         }
     }
 
     let track = ThreatTrack {
-        track_id: Uuid::new_v4(),
-        position: threat.position,
-        velocity: threat.speed,
+        threat_id: threat.id,
+        position: threat.position.clone(),
+        velocity: threat.speed.clone(),
         confidence: threat.confidence,
         threat_level: threat.threat_level,
         last_update: threat.detected_at,
         source_platforms: vec![source_platform],
+        status: TrackStatus::Detected,
+        engaged_by: None,
     };
 
-    tracks.insert(track.track_id, track.clone());
-
+    tracks.insert(
+        threat.id,
+        InternalTrack {
+            kalman: KalmanTrack::new(
+                threat.position.x,
+                threat.position.y,
+                threat.speed.x,
+                threat.speed.y,
+            ),
+            track: track.clone(),
+        },
+    );
     track
 }
 
-pub fn cleanup_tracks(tracks: &mut HashMap<Uuid, ThreatTrack>, now: f64) {
-    tracks.retain(|_, track| now - track.last_update < 10.0);
+pub fn cleanup_tracks(tracks: &mut HashMap<Uuid, InternalTrack>, now: f64) {
+    tracks.retain(|_, track| now - track.track.last_update < 10.0);
 }

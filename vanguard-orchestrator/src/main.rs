@@ -1,4 +1,5 @@
 mod assignment;
+mod kalman;
 mod orchestrator;
 mod state;
 mod subjects;
