@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { TacticalMap } from './TacticalMap'
+import { type Basemap, TacticalMap } from './TacticalMap'
 import { REMOVE_AFTER_MS, STALE_AFTER_MS, type PlatformView, type Threat } from './types'
 import { useNats, type ConnectionStatus } from './useNats'
 
@@ -73,6 +73,7 @@ function ThreatRow({ threat }: { threat: Threat }) {
 export default function App() {
   const { status, threats, platforms } = useNats()
   const [now, setNow] = useState(() => Date.now())
+  const [basemap, setBasemap] = useState<Basemap>('dark')
 
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 1000)
@@ -114,13 +115,20 @@ export default function App() {
           <span>
             PLATFORMS <span className="font-bold text-emerald-400">{platformList.length}</span>
           </span>
+          <button
+            type="button"
+            onClick={() => setBasemap((b) => (b === 'dark' ? 'sat' : 'dark'))}
+            className="border border-cyan-400/30 px-2 py-0.5 font-bold tracking-widest text-cyan-300 hover:bg-cyan-400/10"
+          >
+            {basemap === 'dark' ? 'DARK' : 'SAT'}
+          </button>
           <span className="text-slate-300">{clock}Z</span>
         </div>
       </header>
 
       <div className="flex min-h-0 flex-1">
         <main className="relative min-w-0 flex-1">
-          <TacticalMap threats={threats} platforms={platformList} />
+          <TacticalMap threats={threats} platforms={platformList} basemap={basemap} />
         </main>
 
         <aside className="flex w-72 flex-col gap-4 overflow-y-auto border-l border-cyan-400/15 bg-[#070d13] p-3">

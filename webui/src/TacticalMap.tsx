@@ -5,15 +5,18 @@ import { useEffect, useRef, useState } from 'react'
 import { KYIV, rangeRing, toLngLat } from './geo'
 import { STALE_AFTER_MS, type PlatformView, type Position, type Threat } from './types'
 
+export type Basemap = 'dark' | 'sat'
+
 interface TacticalMapProps {
   threats: Threat[]
   platforms: PlatformView[]
+  basemap: Basemap
 }
 
-const DARK_BASEMAP: StyleSpecification = {
+const BASE_STYLE: StyleSpecification = {
   version: 8,
   sources: {
-    basemap: {
+    dark: {
       type: 'raster',
       tiles: ['a', 'b', 'c', 'd'].map(
         (s) => `https://${s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png`,
@@ -21,8 +24,26 @@ const DARK_BASEMAP: StyleSpecification = {
       tileSize: 256,
       attribution: '© OpenStreetMap contributors © CARTO',
     },
+    satellite: {
+      type: 'raster',
+      tiles: [
+        'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+      ],
+      tileSize: 256,
+      attribution: 'Imagery © Esri',
+    },
   },
-  layers: [{ id: 'basemap', type: 'raster', source: 'basemap' }],
+  layers: [
+    { id: 'dark', type: 'raster', source: 'dark' },
+    { id: 'satellite', type: 'raster', source: 'satellite', layout: { visibility: 'none' } },
+    // Dimming layer over satellite imagery to keep tactical overlays readable.
+    {
+      id: 'sat-dim',
+      type: 'background',
+      layout: { visibility: 'none' },
+      paint: { 'background-color': '#04070b', 'background-opacity': 0.45 },
+    },
+  ],
 }
 
 function threatColor(level: number): string {
@@ -43,7 +64,7 @@ function vectorEnd(threat: Threat): Position {
   }
 }
 
-export function TacticalMap({ threats, platforms }: TacticalMapProps) {
+export function TacticalMap({ threats, platforms, basemap }: TacticalMapProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<maplibregl.Map | null>(null)
   const markersRef = useRef(new Map<string, maplibregl.Marker>())
@@ -55,7 +76,7 @@ export function TacticalMap({ threats, platforms }: TacticalMapProps) {
 
     const map = new maplibregl.Map({
       container,
-      style: DARK_BASEMAP,
+      style: BASE_STYLE,
       center: KYIV,
       zoom: 8.2,
     })
@@ -126,6 +147,15 @@ export function TacticalMap({ threats, platforms }: TacticalMapProps) {
       mapRef.current = null
     }
   }, [])
+
+  // Toggle the satellite imagery + dimming overlay on/off.
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map || !ready) return
+    const sat = basemap === 'sat'
+    map.setLayoutProperty('satellite', 'visibility', sat ? 'visible' : 'none')
+    map.setLayoutProperty('sat-dim', 'visibility', sat ? 'visible' : 'none')
+  }, [basemap, ready])
 
   useEffect(() => {
     const map = mapRef.current
