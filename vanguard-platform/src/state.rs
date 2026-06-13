@@ -4,11 +4,18 @@ use uuid::Uuid;
 
 use vanguard_core::{DetectedThreat, Interceptor, PlatformInterceptor, ThreatTrack};
 
+use crate::kalman::KalmanTrack;
+
+pub struct TrackedThreat {
+    pub track: ThreatTrack,
+    pub kalman: KalmanTrack,
+}
+
 pub struct PlatformState {
     pub platform: PlatformInterceptor,
     pub threats: HashMap<Uuid, DetectedThreat>,
     pub engaged_threats: HashSet<Uuid>,
-    pub tracks: HashMap<Uuid, ThreatTrack>,
+    pub tracks: HashMap<Uuid, TrackedThreat>,
     pub known_interceptors: HashMap<Uuid, Interceptor>,
 }
 

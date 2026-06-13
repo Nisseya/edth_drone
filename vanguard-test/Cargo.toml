@@ -14,3 +14,4 @@ async-nats = "0.42"
 vanguard-core = { path = "../vanguard-core" }
 vanguard-platform = { path = "../vanguard-platform" }
 vanguard-orchestrator = { path = "../vanguard-orchestrator" }
+vanguard-interceptor = { path = "../vanguard-interceptor" }

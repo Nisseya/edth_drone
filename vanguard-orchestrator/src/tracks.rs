@@ -14,6 +14,31 @@ pub fn update_track(
     threat: DetectedThreat,
     source_platform: Uuid,
 ) -> ThreatTrack {
+    if let Some(internal) = tracks.get_mut(&threat.id) {
+        internal.kalman.update(threat.position.x, threat.position.y);
+
+        let (x, y) = internal.kalman.position();
+        let (vx, vy) = internal.kalman.velocity();
+
+        internal.track.position.x = x;
+        internal.track.position.y = y;
+
+        internal.track.velocity.x = vx;
+        internal.track.velocity.y = vy;
+
+        internal.track.confidence = internal.track.confidence.max(threat.confidence);
+
+        internal.track.threat_level = internal.track.threat_level.max(threat.threat_level);
+
+        internal.track.last_update = threat.detected_at;
+
+        if !internal.track.source_platforms.contains(&source_platform) {
+            internal.track.source_platforms.push(source_platform);
+        }
+
+        return internal.track.clone();
+    }
+
     for internal in tracks.values_mut() {
         let (x, y) = internal.kalman.position();
 
@@ -24,7 +49,6 @@ pub fn update_track(
             internal.kalman.update(threat.position.x, threat.position.y);
 
             let (x, y) = internal.kalman.position();
-
             let (vx, vy) = internal.kalman.velocity();
 
             internal.track.position.x = x;
@@ -34,6 +58,8 @@ pub fn update_track(
             internal.track.velocity.y = vy;
 
             internal.track.confidence = internal.track.confidence.max(threat.confidence);
+
+            internal.track.threat_level = internal.track.threat_level.max(threat.threat_level);
 
             internal.track.last_update = threat.detected_at;
 
@@ -69,6 +95,7 @@ pub fn update_track(
             track: track.clone(),
         },
     );
+
     track
 }
 

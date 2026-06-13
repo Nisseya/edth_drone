@@ -41,8 +41,15 @@ impl InterceptorAgent {
         };
 
         let Some(track) = self.state.tracks.get(&target_id) else {
+            println!(
+                "[INTERCEPTOR {}] target {} assigned but no track found",
+                self.state.interceptor.id, target_id
+            );
+
             return None;
         };
+
+        let distance_before = self.state.interceptor.position.distance(&track.position);
 
         self.state.interceptor.position = self
             .state
@@ -50,15 +57,25 @@ impl InterceptorAgent {
             .position
             .step_toward(&track.position, SPEED);
 
+        let distance_after = self.state.interceptor.position.distance(&track.position);
+
+        println!(
+            "[INTERCEPTOR {}] moving toward threat {} ({:.1} -> {:.1})",
+            self.state.interceptor.id, target_id, distance_before, distance_after
+        );
+
         if self.state.interceptor.position.distance(&track.position) < INTERCEPT_DISTANCE {
-            self.state.interceptor.state = InterceptorState::Destroyed;
+            self.state.target_id = None;
+
+            self.state.interceptor.assigned_track = None;
+
+            self.state.interceptor.state = InterceptorState::Idle;
 
             return Some(target_id);
         }
 
         None
     }
-
     async fn publish_update(&self) -> Result<()> {
         self.publish(
             INTERCEPTOR_UPDATE,

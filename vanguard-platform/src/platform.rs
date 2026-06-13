@@ -1,11 +1,15 @@
-use std::time::Duration;
+use std::{collections::HashMap, time::Duration};
 
 use anyhow::Result;
 use async_nats::Client;
 use futures::StreamExt;
 use uuid::Uuid;
+use vanguard_interceptor::InterceptorRuntimeState;
 
-use crate::state::PlatformState;
+use crate::{
+    kalman::KalmanTrack,
+    state::{PlatformState, TrackedThreat},
+};
 
 const THREAT_DETECTED: &str = "vanguard.threat.detected";
 
@@ -17,7 +21,8 @@ const STRATEGY_UPDATE: &str = "vanguard.strategy.update";
 
 use vanguard_core::{
     DetectedThreat, Interceptor, InterceptorState, Message, NEW_PLATFORM, NeighborPlatform,
-    Position, ThreatClassification, ThreatTrack, interceptor::TrackStatus,
+    Position, THREAT_DESTROYED, ThreatClassification, ThreatTrack, WORLD_THREAT_DETECTED,
+    interceptor::TrackStatus,
 };
 
 pub struct Platform {
@@ -62,7 +67,9 @@ impl Platform {
     }
 
     pub async fn detect_threat(&mut self, threat: DetectedThreat) -> Result<()> {
-        println!("[{}] DETECT {}", self.state.platform.name, threat.id);
+        println!("[{}] DETECT {}", self.state.platform.name, threat.id,);
+
+        let is_new_track = self.handle_threat_detected(threat.clone())?;
 
         self.state.threats.insert(threat.id, threat.clone());
 
@@ -75,7 +82,7 @@ impl Platform {
         )
         .await?;
 
-        if self.is_best_platform(&threat) {
+        if is_new_track && self.is_best_platform(&threat) {
             self.engage_threat(threat.id).await?;
         }
 
@@ -97,25 +104,32 @@ impl Platform {
     }
 
     async fn engage_threat(&mut self, threat_id: Uuid) -> Result<()> {
+        if self.state.engaged_threats.contains(&threat_id) {
+            return Ok(());
+        }
+
+        let Some(interceptor) = self
+            .state
+            .platform
+            .interceptors
+            .iter()
+            .find(|i| matches!(i.state, InterceptorState::Idle))
+        else {
+            return Ok(());
+        };
+
+        let interceptor_id = interceptor.id;
+
         self.state.engaged_threats.insert(threat_id);
 
-        let interceptor_id = {
-            let Some(interceptor) = self
-                .state
-                .platform
-                .interceptors
-                .iter_mut()
-                .find(|i| matches!(i.state, InterceptorState::Idle))
-            else {
-                return Ok(());
-            };
-
-            interceptor.assigned_track = Some(threat_id);
-
-            interceptor.state = InterceptorState::Intercepting(threat_id);
-
-            interceptor.id
-        };
+        self.publish(
+            "vanguard.interceptor.target.assigned",
+            Message::InterceptorTargetAssigned {
+                interceptor_id,
+                threat_id,
+            },
+        )
+        .await?;
 
         self.publish(
             THREAT_ENGAGED,
@@ -130,22 +144,55 @@ impl Platform {
         Ok(())
     }
 
-    async fn handle_threat_detected(
-        &mut self,
-        threat: DetectedThreat,
-        source_platform: Uuid,
-    ) -> Result<()> {
-        self.state.threats.insert(threat.id, threat.clone());
+    fn handle_threat_detected(&mut self, threat: DetectedThreat) -> Result<bool> {
+        match self.state.tracks.get_mut(&threat.id) {
+            Some(track) => {
+                track.kalman.update(threat.position.x, threat.position.y);
 
-        if source_platform == self.state.platform.id {
-            return Ok(());
+                let (x, y) = track.kalman.position();
+
+                let (vx, vy) = track.kalman.velocity();
+
+                track.track.position.x = x;
+                track.track.position.y = y;
+
+                track.track.velocity.x = vx;
+                track.track.velocity.y = vy;
+
+                track.track.confidence = threat.confidence;
+
+                track.track.threat_level = threat.threat_level;
+
+                Ok(false)
+            }
+
+            None => {
+                self.state.tracks.insert(
+                    threat.id,
+                    TrackedThreat {
+                        track: ThreatTrack {
+                            threat_id: threat.id,
+                            position: threat.position.clone(),
+                            velocity: threat.speed.clone(),
+                            confidence: threat.confidence,
+                            threat_level: threat.threat_level,
+                            last_update: threat.detected_at,
+                            source_platforms: vec![self.state.platform.id],
+                            status: TrackStatus::Detected,
+                            engaged_by: None,
+                        },
+                        kalman: KalmanTrack::new(
+                            threat.position.x,
+                            threat.position.y,
+                            threat.speed.x,
+                            threat.speed.y,
+                        ),
+                    },
+                );
+
+                Ok(true)
+            }
         }
-
-        if self.is_best_platform(&threat) {
-            self.engage_threat(threat.id).await?;
-        }
-
-        Ok(())
     }
 
     fn handle_threat_engaged(&mut self, threat_id: Uuid, _interceptor_id: Uuid) {
@@ -154,7 +201,7 @@ impl Platform {
         self.state.threats.remove(&threat_id);
 
         if let Some(track) = self.state.tracks.get_mut(&threat_id) {
-            track.status = TrackStatus::Engaged;
+            track.track.status = TrackStatus::Engaged;
         }
     }
 
@@ -205,40 +252,27 @@ impl Platform {
             self.state.platform.name, track.threat_id, track.status,
         );
 
-        match track.status {
-            TrackStatus::Detected => {
-                self.state.engaged_threats.remove(&track.threat_id);
+        let status = track.status.clone();
 
-                self.state.tracks.insert(track.threat_id, track.clone());
+        if let Some(local_track) = self.state.tracks.get_mut(&track.threat_id) {
+            local_track.track.status = status.clone();
 
-                self.state
-                    .threats
-                    .entry(track.threat_id)
-                    .or_insert(DetectedThreat {
-                        id: track.threat_id,
-                        position: track.position,
-                        speed: track.velocity,
-                        threat_level: track.threat_level,
-                        classification: ThreatClassification::Unknown,
-                        confidence: track.confidence,
-                        detected_at: track.last_update,
-                    });
-            }
+            local_track.track.engaged_by = track.engaged_by;
+        }
+
+        match status {
+            TrackStatus::Detected => {}
 
             TrackStatus::Engaged => {
                 self.state.engaged_threats.insert(track.threat_id);
-
-                self.state.threats.remove(&track.threat_id);
-
-                self.state.tracks.insert(track.threat_id, track);
             }
 
             TrackStatus::Destroyed => {
                 self.state.engaged_threats.remove(&track.threat_id);
 
-                self.state.threats.remove(&track.threat_id);
-
                 self.state.tracks.remove(&track.threat_id);
+
+                self.state.threats.remove(&track.threat_id);
             }
         }
 
@@ -246,9 +280,39 @@ impl Platform {
     }
 
     fn handle_interceptor_update(&mut self, interceptor: Interceptor) {
+        if let Some(local) = self
+            .state
+            .platform
+            .interceptors
+            .iter_mut()
+            .find(|i| i.id == interceptor.id)
+        {
+            *local = interceptor.clone();
+        }
+
         self.state
             .known_interceptors
             .insert(interceptor.id, interceptor);
+    }
+
+    fn handle_threat_destroyed(&mut self, threat_id: Uuid, interceptor_id: Uuid) {
+        self.state.engaged_threats.remove(&threat_id);
+
+        self.state.tracks.remove(&threat_id);
+
+        self.state.threats.remove(&threat_id);
+
+        if let Some(interceptor) = self
+            .state
+            .platform
+            .interceptors
+            .iter_mut()
+            .find(|i| i.id == interceptor_id)
+        {
+            interceptor.state = InterceptorState::Idle;
+
+            interceptor.assigned_track = None;
+        }
     }
 
     async fn handle_message(&mut self, message: Message) -> Result<()> {
@@ -257,7 +321,15 @@ impl Platform {
                 threat,
                 source_platform,
             } => {
-                self.handle_threat_detected(threat, source_platform).await?;
+                self.handle_threat_detected(threat);
+            }
+
+            Message::ThreatDestroyed {
+                threat_id,
+                interceptor_id,
+                ..
+            } => {
+                self.handle_threat_destroyed(threat_id, interceptor_id);
             }
 
             Message::ThreatEngaged {
@@ -290,11 +362,6 @@ impl Platform {
                 platform_id,
                 interceptor,
             } => self.handle_interceptor_update(interceptor),
-            Message::ThreatDestroyed {
-                threat_id,
-                platform_id,
-                interceptor_id,
-            } => {}
             _ => {}
         }
 
@@ -303,11 +370,12 @@ impl Platform {
 
     pub async fn run(mut self) -> Result<()> {
         let mut threat_sub = self.nats.subscribe(THREAT_DETECTED).await?;
-
+        let mut interceptor_sub = self.nats.subscribe("vanguard.interceptor.update").await?;
         let mut engaged_sub = self.nats.subscribe(THREAT_ENGAGED).await?;
-
+        let mut destroyed_sub = self.nats.subscribe(THREAT_DESTROYED).await?;
         let subject = vanguard_core::neighbor_subject(&self.state.platform.id);
-
+        let mut world_sub = self.nats.subscribe(WORLD_THREAT_DETECTED).await?;
+        let mut track_sub = self.nats.subscribe("vanguard.track.updated").await?;
         let mut neighbor_sub = self.nats.subscribe(subject).await?;
 
         let mut strategy_sub = self.nats.subscribe(STRATEGY_UPDATE).await?;
@@ -324,12 +392,120 @@ impl Platform {
         )
         .await?;
 
+        for interceptor in self.state.platform.interceptors.clone() {
+            let agent = vanguard_interceptor::InterceptorAgent::new(
+                InterceptorRuntimeState {
+                    platform_id: self.state.platform.id,
+                    interceptor,
+                    target_id: None,
+                    tracks: HashMap::new(),
+                },
+                self.nats.clone(),
+            );
+
+            tokio::spawn(async move {
+                let _ = agent.run().await;
+            });
+        }
+
         loop {
             tokio::select! {
 
                 _ = heartbeat.tick() => {
+
+                    for tracked in self.state.tracks.values_mut() {
+
+                        tracked.kalman.predict(1.0);
+
+                        let (x, y) =
+                            tracked.kalman.position();
+
+                        let (vx, vy) =
+                            tracked.kalman.velocity();
+
+                        tracked.track.position.x = x;
+                        tracked.track.position.y = y;
+
+                        tracked.track.velocity.x = vx;
+                        tracked.track.velocity.y = vy;
+                    }
+
+                    let tracks = self
+                        .state
+                        .tracks
+                        .values()
+                        .map(|t| t.track.clone())
+                        .collect::<Vec<_>>();
+
                     self.publish_neighbor_update()
                         .await?;
+
+                    for track in tracks {
+
+                        self.publish(
+                            "vanguard.track.updated",
+                            Message::TrackUpdated {
+                                track,
+                            },
+                        )
+                        .await?;
+                    }
+                }
+
+                Some(msg) = destroyed_sub.next() => {
+
+                    let msg: Message =
+                        serde_json::from_slice(
+                            &msg.payload,
+                        )?;
+
+                    self.handle_message(msg)
+                        .await?;
+                }
+
+                Some(msg) = interceptor_sub.next() => {
+
+                    let msg: Message =
+                        serde_json::from_slice(
+                            &msg.payload,
+                        )?;
+
+                    self.handle_message(msg)
+                        .await?;
+                }
+
+                Some(msg) = track_sub.next() => {
+
+                    let msg: Message =
+                        serde_json::from_slice(
+                            &msg.payload,
+                        )?;
+
+                    self.handle_message(msg)
+                        .await?;
+                }
+
+                Some(msg) = world_sub.next() => {
+
+                    let threat: DetectedThreat =
+                        serde_json::from_slice(
+                            &msg.payload
+                        )?;
+
+                    println!(
+                        "[{}] WORLD {} ({})",
+                        self.state.platform.name,
+                        threat.id,
+                        threat.position.x,
+                    );
+
+                    if self.state.platform.position.distance(
+                        &threat.position
+                    ) <= self.state.platform.reach {
+
+                        // Use detect_threat so that engagement logic is triggered
+                        self.detect_threat(threat).await?;
+                    }
                 }
 
                 Some(msg) = threat_sub.next() => {

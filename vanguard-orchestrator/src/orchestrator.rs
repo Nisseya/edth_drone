@@ -11,7 +11,7 @@ use crate::{
 };
 
 use vanguard_core::{
-    Assignment, DetectedThreat, Message, NEW_PLATFORM, NeighborPlatform, interceptor::TrackStatus,
+    Assignment, DetectedThreat, Message, NEW_PLATFORM, NeighborPlatform, THREAT_DESTROYED, interceptor::TrackStatus
 };
 
 pub struct Orchestrator {
@@ -43,12 +43,15 @@ impl Orchestrator {
 
     pub async fn run(mut self) -> Result<()> {
         let mut threat_sub = self.nats.subscribe(THREAT_DETECTED).await?;
+        let mut destroyed_sub =
+            self.nats
+                .subscribe(THREAT_DESTROYED)
+                .await?;
 
         let mut neighbor_sub = self.nats.subscribe(NEIGHBOR_UPDATE).await?;
 
         let mut interceptor_sub = self.nats.subscribe(INTERCEPTOR_UPDATE).await?;
         let mut new_platform_sub = self.nats.subscribe(NEW_PLATFORM).await?;
-        let mut world_sub = self.nats.subscribe(WORLD_THREAT_DETECTED).await?;
         let mut engaged_sub = self.nats.subscribe(THREAT_ENGAGED).await?;
 
         let mut heartbeat = tokio::time::interval(std::time::Duration::from_secs(1));
@@ -57,22 +60,6 @@ impl Orchestrator {
             tokio::select! {
 
                 _ = heartbeat.tick() => {
-
-                    for track in self.state.tracks.values_mut() {
-                        track.kalman.predict(1.0);
-
-                        let (x, y) =
-                            track.kalman.position();
-
-                        let (vx, vy) =
-                            track.kalman.velocity();
-
-                        track.track.position.x = x;
-                        track.track.position.y = y;
-
-                        track.track.velocity.x = vx;
-                        track.track.velocity.y = vy;
-                    }
 
                     cleanup_tracks(
                         &mut self.state.tracks,
@@ -92,16 +79,6 @@ impl Orchestrator {
                             .values()
                             .cloned()
                             .collect::<Vec<_>>();
-                    for track in self.state.tracks.values() {
-                        println!(
-                            "[KALMAN] {} pos=({:.1},{:.1}) vel=({:.1},{:.1})",
-                            track.track.threat_id,
-                            track.track.position.x,
-                            track.track.position.y,
-                            track.track.velocity.x,
-                            track.track.velocity.y,
-                        );
-                    }
 
                     let assignments =
                         compute_assignments(
@@ -113,6 +90,47 @@ impl Orchestrator {
                         assignments,
                     )
                     .await?;
+                }
+
+                Some(msg) = destroyed_sub.next() => {
+
+                    let msg: Message =
+                        serde_json::from_slice(
+                            &msg.payload
+                        )?;
+
+                    if let Message::ThreatDestroyed {
+                        threat_id,
+                        ..
+                    } = msg {
+
+                        let updated_track =
+                            if let Some(track) =
+                                self.state.tracks.get_mut(&threat_id)
+                            {
+                                track.track.status =
+                                    TrackStatus::Destroyed;
+
+                                Some(track.track.clone())
+                            } else {
+                                None
+                            };
+
+                        if let Some(track) = updated_track {
+
+                            self.publish(
+                                TRACK_UPDATED,
+                                Message::TrackUpdated {
+                                    track,
+                                },
+                            )
+                            .await?;
+                        }
+
+                        self.state.tracks.remove(
+                            &threat_id
+                        );
+                    }
                 }
 
                 Some(msg) =
@@ -212,42 +230,6 @@ impl Orchestrator {
                     }
                 }
 
-                Some(msg) = world_sub.next() => {
-
-                    let threat: DetectedThreat =
-                        serde_json::from_slice(
-                            &msg.payload
-                        )?;
-
-                    println!(
-                        "[Orchestrator] WORLD threat {}",
-                        threat.id
-                    );
-
-                    let track =
-                        update_track(
-                            &mut self.state.tracks,
-                            threat.clone(),
-                            Uuid::nil(),
-                        );
-
-                    self.publish(
-                        TRACK_UPDATED,
-                        Message::TrackUpdated {
-                            track,
-                        },
-                    )
-                    .await?;
-
-                    self.publish(
-                        THREAT_DETECTED,
-                        Message::ThreatDetected {
-                            threat,
-                            source_platform: Uuid::nil(),
-                        },
-                    )
-                    .await?;
-                }
 
                 Some(msg) = new_platform_sub.next() => {
 

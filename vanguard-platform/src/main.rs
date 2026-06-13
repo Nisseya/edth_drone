@@ -1,6 +1,6 @@
+mod kalman;
 mod platform;
 mod state;
-
 use platform::Platform;
 use state::PlatformState;
 use std::collections::{HashMap, HashSet};

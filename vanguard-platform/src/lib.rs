@@ -1,3 +1,4 @@
+mod kalman;
 pub mod platform;
 pub mod state;
 

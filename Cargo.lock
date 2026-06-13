@@ -1782,11 +1782,13 @@ dependencies = [
  "anyhow",
  "async-nats",
  "futures",
+ "nalgebra",
  "serde",
  "serde_json",
  "tokio",
  "uuid",
  "vanguard-core",
+ "vanguard-interceptor",
 ]
 
 [[package]]
@@ -1800,6 +1802,7 @@ dependencies = [
  "tokio",
  "uuid",
  "vanguard-core",
+ "vanguard-interceptor",
  "vanguard-orchestrator",
  "vanguard-platform",
 ]
