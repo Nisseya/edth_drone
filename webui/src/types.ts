@@ -68,6 +68,44 @@ export interface PlatformView {
   lastSeen: number
 }
 
+/** Mirror of vanguard_core::MapConfig (live-tunable swarm parameters). */
+export interface MapConfig {
+  decoy_ratio: number
+  swarm_min: number
+  swarm_max: number
+  spawn_interval_s: number
+  zone_radius: number
+  max_active: number
+}
+
+export const DEFAULT_MAP_CONFIG: MapConfig = {
+  decoy_ratio: 0.4,
+  swarm_min: 6,
+  swarm_max: 12,
+  spawn_interval_s: 45,
+  zone_radius: 6_000,
+  max_active: 40,
+}
+
+/** Mirror of vanguard_core::PlatformSpec. */
+export interface PlatformSpec {
+  id: string
+  name: string
+  position: Position
+  reach: number
+  ammo: number
+}
+
+export function ammoLabel(n: number): string {
+  return n === 0 ? '∅' : String(n)
+}
+
+// Control subjects (UI → Rust).
+export const MAP_CONFIG_SUBJECT = 'control.map.config'
+export const PLATFORM_ADD_SUBJECT = 'control.platform.add'
+export const PLATFORM_REMOVE_SUBJECT = 'control.platform.remove'
+export const CONTROL_RESET_SUBJECT = 'control.reset'
+
 export const STALE_AFTER_MS = 5_000
 /** A platform silent for this long is removed from the picture entirely. */
 export const REMOVE_AFTER_MS = 30_000

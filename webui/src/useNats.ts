@@ -1,6 +1,15 @@
 import { connect, type NatsConnection } from 'nats.ws'
-import { useEffect, useState } from 'react'
-import type { InterceptorReport, PlatformView, Threat, ThreatClassification } from './types'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import {
+  CONTROL_RESET_SUBJECT,
+  PLATFORM_REMOVE_SUBJECT,
+  type InterceptorReport,
+  type PlatformView,
+  type Threat,
+  type ThreatClassification,
+} from './types'
+
+const REMOVE_GRACE_MS = 3_000
 
 export type ConnectionStatus = 'connecting' | 'connected' | 'offline'
 
@@ -20,6 +29,32 @@ export function useNats(url: string = NATS_WS_URL) {
   // it within its classification range.
   const [classifications, setClassifications] = useState<Map<string, ThreatClassification>>(
     new Map(),
+  )
+  const connectionRef = useRef<NatsConnection | undefined>(undefined)
+  // Platforms just removed — ignore any in-flight report for them briefly so
+  // they don't flicker back before the host stops publishing.
+  const recentlyRemoved = useRef<Map<string, number>>(new Map())
+
+  // Publish a JSON command (config / platform add / remove) to the Rust side.
+  const publish = useCallback((subject: string, payload: unknown) => {
+    const data = new TextEncoder().encode(
+      typeof payload === 'string' ? payload : JSON.stringify(payload),
+    )
+    connectionRef.current?.publish(subject, data)
+  }, [])
+
+  // Remove a platform: tell the host and drop it from the UI immediately.
+  const removePlatform = useCallback(
+    (platformId: string) => {
+      recentlyRemoved.current.set(platformId, Date.now())
+      publish(PLATFORM_REMOVE_SUBJECT, platformId)
+      setPlatforms((previous) => {
+        const next = new Map(previous)
+        next.delete(platformId)
+        return next
+      })
+    },
+    [publish],
   )
 
   useEffect(() => {
@@ -42,6 +77,7 @@ export function useNats(url: string = NATS_WS_URL) {
         void connection.close()
         return
       }
+      connectionRef.current = connection
       setStatus('connected')
 
       void (async () => {
@@ -69,6 +105,12 @@ export function useNats(url: string = NATS_WS_URL) {
       void (async () => {
         for await (const message of connection.subscribe('platform.*.report')) {
           const report = JSON.parse(decoder.decode(message.data)) as InterceptorReport
+          // Skip reports for a just-removed platform during the grace window.
+          const removedAt = recentlyRemoved.current.get(report.platform_id)
+          if (removedAt !== undefined) {
+            if (Date.now() - removedAt < REMOVE_GRACE_MS) continue
+            recentlyRemoved.current.delete(report.platform_id)
+          }
           setPlatforms((previous) => {
             const next = new Map(previous)
             next.set(report.platform_id, { report, lastSeen: Date.now() })
@@ -90,9 +132,19 @@ export function useNats(url: string = NATS_WS_URL) {
 
     return () => {
       cancelled = true
+      connectionRef.current = undefined
       void connection?.close()
     }
   }, [url])
 
-  return { status, threats, platforms, classifications }
+  // Reset to baseline: tell the Rust side and clear the local picture so it
+  // repopulates from the preset feeds.
+  const reset = useCallback(() => {
+    publish(CONTROL_RESET_SUBJECT, '')
+    setThreats([])
+    setPlatforms(new Map())
+    setClassifications(new Map())
+  }, [publish])
+
+  return { status, threats, platforms, classifications, publish, removePlatform, reset }
 }

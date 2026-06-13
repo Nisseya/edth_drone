@@ -1,10 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
+import { ControlPanel } from './ControlPanel'
 import { type Basemap, TacticalMap } from './TacticalMap'
 import {
+  ammoLabel,
   REMOVE_AFTER_MS,
   STALE_AFTER_MS,
   trackCategory,
   type PlatformView,
+  type Position,
   type Threat,
   type TrackCategory,
 } from './types'
@@ -47,9 +50,7 @@ function PlatformCard({ view, now }: { view: PlatformView; now: number }) {
       <div className="mt-2 grid grid-cols-2 gap-1 text-[11px] text-slate-400">
         <span>
           INTERCEPTORS{' '}
-          <span className="text-slate-200">
-            {'●'.repeat(report.interceptors_remaining) || '∅'}
-          </span>
+          <span className="text-slate-200">{ammoLabel(report.interceptors_remaining)}</span>
         </span>
         <span>
           RANGE <span className="text-slate-200">{(report.reach / 1000).toFixed(1)} km</span>
@@ -89,9 +90,12 @@ function ThreatRow({ threat, category }: { threat: Threat; category: TrackCatego
 }
 
 export default function App() {
-  const { status, threats, platforms, classifications } = useNats()
+  const { status, threats, platforms, classifications, publish, removePlatform, reset } = useNats()
   const [now, setNow] = useState(() => Date.now())
   const [basemap, setBasemap] = useState<Basemap>('dark')
+  const [placing, setPlacing] = useState(false)
+  const [pending, setPending] = useState<Position | null>(null)
+  const [previewReach, setPreviewReach] = useState(15_000)
 
   const categoryOf = (threat: Threat): TrackCategory =>
     trackCategory(classifications.get(threat.id) ?? 'Unknown')
@@ -166,10 +170,25 @@ export default function App() {
             platforms={platformList}
             basemap={basemap}
             classifications={classifications}
+            placing={placing}
+            onMapClick={(pos) => setPending(pos)}
+            preview={pending ? { position: pending, reach: previewReach } : null}
           />
         </main>
 
         <aside className="flex w-72 flex-col gap-4 overflow-y-auto border-l border-cyan-400/15 bg-[#070d13] p-3">
+          <ControlPanel
+            publish={publish}
+            removePlatform={removePlatform}
+            reset={reset}
+            platforms={platformList}
+            placing={placing}
+            setPlacing={setPlacing}
+            pending={pending}
+            clearPending={() => setPending(null)}
+            onReachChange={setPreviewReach}
+          />
+
           <section>
             <h2 className="mb-2 text-[10px] font-bold tracking-[0.3em] text-emerald-400/80">
               INTERCEPTOR PLATFORMS

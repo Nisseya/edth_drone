@@ -15,6 +15,11 @@ export function toLngLat(position: Position): [number, number] {
   return [KYIV[0] + position.x / M_PER_DEG_LON, KYIV[1] + position.y / M_PER_DEG_LAT]
 }
 
+/** Inverse of toLngLat: map a lon/lat back to local metres around Kyiv. */
+export function fromLngLat(lng: number, lat: number): Position {
+  return { x: (lng - KYIV[0]) * M_PER_DEG_LON, y: (lat - KYIV[1]) * M_PER_DEG_LAT }
+}
+
 /** Polygon ring approximating a metric circle, as GeoJSON coordinates. */
 export function rangeRing(center: Position, radiusM: number, steps = 64): [number, number][] {
   const ring: [number, number][] = []

@@ -3,6 +3,7 @@ resolver = "3"
 
 members = [
     "vanguard-core",
+    "vanguard-control",
     "vanguard-map",
     "vanguard-orchestrator",
     "vanguard-system-interceptor",

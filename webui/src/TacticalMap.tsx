@@ -2,7 +2,7 @@ import type { FeatureCollection } from 'geojson'
 import maplibregl, { type GeoJSONSource, type StyleSpecification } from 'maplibre-gl'
 import 'maplibre-gl/dist/maplibre-gl.css'
 import { useEffect, useRef, useState } from 'react'
-import { KYIV, rangeRing, toLngLat } from './geo'
+import { KYIV, fromLngLat, rangeRing, toLngLat } from './geo'
 import {
   STALE_AFTER_MS,
   trackCategory,
@@ -19,6 +19,10 @@ interface TacticalMapProps {
   platforms: PlatformView[]
   basemap: Basemap
   classifications: Map<string, ThreatClassification>
+  placing: boolean
+  onMapClick: (pos: Position) => void
+  /** Live preview of the platform being placed (position + reach in metres). */
+  preview: { position: Position; reach: number } | null
 }
 
 const BASE_STYLE: StyleSpecification = {
@@ -64,10 +68,23 @@ const CATEGORY_COLOR = {
 // Defended zone radius (m) — mirrors DEFENDED_ZONE_RADIUS in vanguard-map.
 const DEFENDED_ZONE_RADIUS = 6_000
 
-export function TacticalMap({ threats, platforms, basemap, classifications }: TacticalMapProps) {
+export function TacticalMap({
+  threats,
+  platforms,
+  basemap,
+  classifications,
+  placing,
+  onMapClick,
+  preview,
+}: TacticalMapProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<maplibregl.Map | null>(null)
   const markersRef = useRef(new Map<string, maplibregl.Marker>())
+  // Latest placement state, read by the (once-registered) click handler.
+  const placingRef = useRef(placing)
+  placingRef.current = placing
+  const onMapClickRef = useRef(onMapClick)
+  onMapClickRef.current = onMapClick
   // Smooth interpolation between the 1 Hz ground-truth samples.
   const animRef = useRef(new Map<string, { from: Position; to: Position }>())
   const curRef = useRef(new Map<string, Position>())
@@ -92,6 +109,10 @@ export function TacticalMap({ threats, platforms, basemap, classifications }: Ta
     mapRef.current = map
     map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-left')
     map.addControl(new maplibregl.ScaleControl({ unit: 'metric' }), 'bottom-left')
+
+    map.on('click', (e) => {
+      if (placingRef.current) onMapClickRef.current(fromLngLat(e.lngLat.lng, e.lngLat.lat))
+    })
 
     map.on('load', () => {
       // Defended zone — where threats aim (random impact points across the city).
@@ -127,6 +148,21 @@ export function TacticalMap({ threats, platforms, basemap, classifications }: Ta
           'line-dasharray': [3, 3],
           'line-opacity': 0.4,
         },
+      })
+
+      // Live preview of a platform being placed (amber, follows the reach slider).
+      map.addSource('preview', { type: 'geojson', data: empty() })
+      map.addLayer({
+        id: 'preview-fill',
+        type: 'fill',
+        source: 'preview',
+        paint: { 'fill-color': '#ffd23e', 'fill-opacity': 0.08 },
+      })
+      map.addLayer({
+        id: 'preview-line',
+        type: 'line',
+        source: 'preview',
+        paint: { 'line-color': '#ffd23e', 'line-width': 1.5, 'line-dasharray': [2, 2] },
       })
 
       map.addSource('ranges', { type: 'geojson', data: empty() })
@@ -188,6 +224,29 @@ export function TacticalMap({ threats, platforms, basemap, classifications }: Ta
     map.setLayoutProperty('satellite', 'visibility', sat ? 'visible' : 'none')
     map.setLayoutProperty('sat-dim', 'visibility', sat ? 'visible' : 'none')
   }, [basemap, ready])
+
+  // Live reach preview while placing a platform.
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map || !ready) return
+    const source = map.getSource('preview') as GeoJSONSource | undefined
+    if (!source) return
+    source.setData({
+      type: 'FeatureCollection',
+      features: preview
+        ? [
+            {
+              type: 'Feature',
+              geometry: {
+                type: 'Polygon',
+                coordinates: [rangeRing(preview.position, preview.reach)],
+              },
+              properties: {},
+            },
+          ]
+        : [],
+    })
+  }, [preview, ready])
 
   useEffect(() => {
     const map = mapRef.current
@@ -357,7 +416,9 @@ export function TacticalMap({ threats, platforms, basemap, classifications }: Ta
     return () => cancelAnimationFrame(raf)
   }, [ready])
 
-  return <div ref={containerRef} className="h-full w-full" />
+  return (
+    <div ref={containerRef} className={`h-full w-full ${placing ? '[&_canvas]:cursor-crosshair' : ''}`} />
+  )
 }
 
 function empty(): FeatureCollection {

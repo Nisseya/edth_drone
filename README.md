@@ -89,26 +89,23 @@ docker run -p 4222:4222 nats:latest
 # 5. Lancer la carte (terminal 2) : vérité terrain, publie les menaces sur NATS
 cargo run -p vanguard-map
 
-# 6. Lancer les plateformes d'interception (un terminal chacune).
-#    Déploiement type défense de Kiev (offsets en mètres depuis le centre) :
-#    --reach = portée radar (longue en périphérie, courte en ville).
+# 6. Lancer l'hôte des plateformes (un seul process) : démarre avec le preset
+#    Kiev (6 plateformes périphérie 20 km + 3 défense de point ville 7 km).
+#    On ajoute/retire/place ensuite des plateformes depuis le dashboard.
+cargo run -p vanguard-control
 
-#    Anneau longue portée (périphérie, 20 km) :
-cargo run -p vanguard-system-interceptor -- --name hostomel  -n 6 -x -18600 -y 14800  --reach 20000
-cargo run -p vanguard-system-interceptor -- --name brovary   -n 6 -x 18900  -y 6800   --reach 20000
-cargo run -p vanguard-system-interceptor -- --name vasylkiv  -n 6 -x -15100 -y -30400 --reach 20000
-cargo run -p vanguard-system-interceptor -- --name boryspil  -n 6 -x 30200  -y -11700 --reach 20000
-cargo run -p vanguard-system-interceptor -- --name vyshhorod -n 6 -x 1000   -y 19000  --reach 20000
-cargo run -p vanguard-system-interceptor -- --name obukhiv   -n 6 -x 6000   -y -28000 --reach 20000
-
-#    Défense de point en ville (courte portée, 7 km) :
-cargo run -p vanguard-system-interceptor -- --name maidan       -n 4 -x 0     -y 0     --reach 7000
-cargo run -p vanguard-system-interceptor -- --name livoberezhna -n 4 -x 6000  -y -1500 --reach 7000
-cargo run -p vanguard-system-interceptor -- --name sviatoshyn   -n 4 -x -9000 -y 2000  --reach 7000
-
-# 7. Le dashboard web (carte réelle centrée sur Kiev)
+# 7. Le dashboard web (carte réelle centrée sur Kiev + panneau de contrôle)
 cd webui && pnpm install && pnpm dev    # http://localhost:5173
 ```
+
+Le panneau **SIMULATION CONTROL** du dashboard pilote la map en direct (ratio de
+leurres, taille/cadence des vagues, rayon de zone, plafond) et permet d'**ajouter une
+plateforme en cliquant sur la carte** (nom / portée / munitions) ou d'en retirer. Tout
+passe par NATS : l'UI publie sur `control.map.config` / `control.platform.add` /
+`control.platform.remove`, la map et `vanguard-control` appliquent à chaud.
+
+> Le binaire `vanguard-system-interceptor` (plateforme unique en CLI, option `--reach`)
+> reste disponible si tu préfères lancer des plateformes en process séparés.
 
 (`NATS_URL` est surchargeable par variable d'environnement, défaut `nats://127.0.0.1:4222`.)
 

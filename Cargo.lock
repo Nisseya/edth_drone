@@ -1713,6 +1713,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "vanguard-control"
+version = "0.1.0"
+dependencies = [
+ "async-nats",
+ "futures",
+ "serde_json",
+ "tokio",
+ "uuid",
+ "vanguard-core",
+]
+
+[[package]]
 name = "vanguard-core"
 version = "0.1.0"
 dependencies = [
@@ -1740,6 +1752,7 @@ name = "vanguard-map"
 version = "0.1.0"
 dependencies = [
  "async-nats",
+ "futures",
  "rand",
  "serde_json",
  "tokio",
