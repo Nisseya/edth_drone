@@ -7,12 +7,7 @@ use uuid::Uuid;
 
 use crate::state::InterceptorRuntimeState;
 
-use vanguard_core::{InterceptorState, Message, ThreatTrack};
-
-const TRACK_UPDATED: &str = "vanguard.track.updated";
-const THREAT_DESTROYED: &str = "vanguard.threat.destroyed";
-const INTERCEPTOR_UPDATE: &str = "vanguard.interceptor.update";
-const INTERCEPTOR_TARGET_ASSIGNED: &str = "vanguard.interceptor.target.assigned";
+use vanguard_core::{InterceptorState, Message, ThreatTrack, subjects::*};
 
 const SPEED: f64 = 100.0;
 const INTERCEPT_DISTANCE: f64 = 25.0;

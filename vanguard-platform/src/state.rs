@@ -2,9 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use uuid::Uuid;
 
-use vanguard_core::{DetectedThreat, Interceptor, PlatformInterceptor, ThreatTrack};
-
-use crate::kalman::KalmanTrack;
+use vanguard_core::{DetectedThreat, Interceptor, KalmanTrack, PlatformInterceptor, ThreatTrack};
 
 pub struct TrackedThreat {
     pub track: ThreatTrack,

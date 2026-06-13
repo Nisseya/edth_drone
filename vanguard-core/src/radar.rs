@@ -53,7 +53,8 @@ impl Radar {
                 }
                 None => Speed { x: 0.0, y: 0.0 },
             };
-            self.last_seen.insert(threat.id, (threat.position.clone(), now));
+            self.last_seen
+                .insert(threat.id, (threat.position.clone(), now));
 
             let (classification, confidence) = if range <= self.classification_range {
                 let class = if threat.is_decoy {

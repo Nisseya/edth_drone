@@ -98,7 +98,10 @@ fn kyiv_preset() -> Vec<PlatformSpec> {
 
     ring.iter()
         .map(|&(name, x, y)| spec(name, x, y, 20_000.0, 6))
-        .chain(city.iter().map(|&(name, x, y)| spec(name, x, y, 7_000.0, 4)))
+        .chain(
+            city.iter()
+                .map(|&(name, x, y)| spec(name, x, y, 7_000.0, 4)),
+        )
         .collect()
 }
 

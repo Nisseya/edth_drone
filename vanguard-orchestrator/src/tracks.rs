@@ -2,8 +2,8 @@ use std::collections::HashMap;
 
 use uuid::Uuid;
 
-use crate::kalman::KalmanTrack;
 use crate::state::InternalTrack;
+use vanguard_core::KalmanTrack;
 
 use vanguard_core::{DetectedThreat, ThreatTrack, interceptor::TrackStatus};
 

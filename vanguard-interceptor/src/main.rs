@@ -1,6 +1,5 @@
 mod agent;
 mod state;
-mod subjects;
 
 use std::collections::HashMap;
 

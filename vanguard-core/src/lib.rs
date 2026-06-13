@@ -1,23 +1,25 @@
 pub mod control;
 pub mod events;
 pub mod interceptor;
+pub mod kalman;
 pub mod position;
 pub mod radar;
 pub mod subjects;
 pub mod threat;
 
+pub use kalman::KalmanTrack;
 pub use subjects::*;
 
 pub use control::{
     CONTROL_RESET, MAP_CONFIG, MapConfig, PLATFORM_ADD, PLATFORM_REMOVE, PlatformSpec,
 };
 pub use events::{Assignment, Message};
-pub use radar::Radar;
 pub use interceptor::{
     DetectedThreat, Interceptor, InterceptorReport, InterceptorState, NeighborPlatform,
     PlatformInterceptor, ThreatClassification, ThreatTrack,
 };
 pub use position::{Position, Speed};
+pub use radar::Radar;
 pub use threat::Threat;
 pub use uuid::Uuid;
 

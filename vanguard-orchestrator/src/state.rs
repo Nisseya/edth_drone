@@ -2,9 +2,7 @@ use std::collections::HashMap;
 
 use uuid::Uuid;
 
-use crate::kalman::KalmanTrack;
-
-use vanguard_core::{Interceptor, NeighborPlatform, ThreatTrack};
+use vanguard_core::{Interceptor, KalmanTrack, NeighborPlatform, ThreatTrack};
 
 #[derive(Clone, Debug)]
 pub struct InterceptorInfo {

@@ -88,8 +88,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         for active in &mut actives {
-            active.threat.position =
-                active.threat.position.step_toward(&active.target, active.threat.speed * dt);
+            active.threat.position = active
+                .threat
+                .position
+                .step_toward(&active.target, active.threat.speed * dt);
         }
 
         actives.retain(|active| {

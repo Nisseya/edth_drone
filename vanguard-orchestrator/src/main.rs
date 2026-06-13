@@ -1,8 +1,6 @@
 mod assignment;
-mod kalman;
 mod orchestrator;
 mod state;
-mod subjects;
 mod tracks;
 
 use anyhow::Result;
