@@ -53,21 +53,20 @@ function threatColor(level: number): string {
   return '#ffd23e'
 }
 
-/** 20 s projection of the threat's course (it flies straight at the asset). */
-function vectorEnd(threat: Threat): Position {
-  const distance = Math.hypot(threat.position.x, threat.position.y)
-  if (distance < 1) return threat.position
-  const projection = 20 * threat.speed
-  return {
-    x: threat.position.x - (threat.position.x / distance) * projection,
-    y: threat.position.y - (threat.position.y / distance) * projection,
-  }
-}
 
 export function TacticalMap({ threats, platforms, basemap }: TacticalMapProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<maplibregl.Map | null>(null)
   const markersRef = useRef(new Map<string, maplibregl.Marker>())
+  // Smooth interpolation between the 1 Hz ground-truth samples.
+  const animRef = useRef(new Map<string, { from: Position; to: Position }>())
+  const curRef = useRef(new Map<string, Position>())
+  const segRef = useRef({ start: 0, dur: 1000 })
+  const lastDataMs = useRef(0)
+  const loopDataRef = useRef<{
+    threats: Threat[]
+    platforms: PlatformView[]
+  }>({ threats: [], platforms: [] })
   const [ready, setReady] = useState(false)
 
   useEffect(() => {
@@ -119,18 +118,6 @@ export function TacticalMap({ threats, platforms, basemap }: TacticalMapProps) {
         },
       })
 
-      map.addSource('vectors', { type: 'geojson', data: empty() })
-      map.addLayer({
-        id: 'vectors',
-        type: 'line',
-        source: 'vectors',
-        paint: {
-          'line-color': ['get', 'color'],
-          'line-width': 1.6,
-          'line-opacity': 0.8,
-        },
-      })
-
       // Defended asset: a single permanent marker.
       const asset = document.createElement('div')
       asset.className = 'asset-marker'
@@ -169,7 +156,7 @@ export function TacticalMap({ threats, platforms, basemap }: TacticalMapProps) {
       }
     }
 
-    // --- GeoJSON layers: range bubbles, detection links, velocity vectors.
+    // --- Range bubbles (platforms are static — set once per data tick).
     const ranges = platforms.map(({ report, lastSeen }) => ({
       type: 'Feature' as const,
       geometry: {
@@ -178,32 +165,19 @@ export function TacticalMap({ threats, platforms, basemap }: TacticalMapProps) {
       },
       properties: { stale: now - lastSeen > STALE_AFTER_MS },
     }))
-
-    const links = platforms.flatMap(({ report, lastSeen }) =>
-      now - lastSeen > STALE_AFTER_MS
-        ? []
-        : report.threats.map((contact) => ({
-            type: 'Feature' as const,
-            geometry: {
-              type: 'LineString' as const,
-              coordinates: [toLngLat(report.position), toLngLat(contact.position)],
-            },
-            properties: {},
-          })),
-    )
-
-    const vectors = threats.map((threat) => ({
-      type: 'Feature' as const,
-      geometry: {
-        type: 'LineString' as const,
-        coordinates: [toLngLat(threat.position), toLngLat(vectorEnd(threat))],
-      },
-      properties: { color: threatColor(threat.threat_level) },
-    }))
-
     ;(map.getSource('ranges') as GeoJSONSource).setData({ type: 'FeatureCollection', features: ranges })
-    ;(map.getSource('links') as GeoJSONSource).setData({ type: 'FeatureCollection', features: links })
-    ;(map.getSource('vectors') as GeoJSONSource).setData({ type: 'FeatureCollection', features: vectors })
+
+    // --- Animation: retarget each threat from its current drawn position to
+    // the new sample. The rAF loop tweens between them at constant velocity.
+    const dataNow = Date.now()
+    const dur = lastDataMs.current ? Math.min(2000, Math.max(500, dataNow - lastDataMs.current)) : 1000
+    lastDataMs.current = dataNow
+    for (const threat of threats) {
+      const from = curRef.current.get(threat.id) ?? threat.position
+      animRef.current.set(threat.id, { from, to: threat.position })
+    }
+    segRef.current = { start: performance.now(), dur }
+    loopDataRef.current = { threats, platforms }
 
     // --- DOM markers: platforms and threats, diffed by id.
     const markers = markersRef.current
@@ -241,10 +215,10 @@ export function TacticalMap({ threats, platforms, basemap }: TacticalMapProps) {
         const el = document.createElement('div')
         el.className = 'threat-marker'
         el.innerHTML = '<div class="threat-dot"></div><span class="threat-label"></span><div class="marker-tip"></div>'
+        // Initial position only — the rAF loop owns motion from here on.
         marker = new maplibregl.Marker({ element: el }).setLngLat(toLngLat(threat.position)).addTo(map)
         markers.set(key, marker)
       }
-      marker.setLngLat(toLngLat(threat.position))
       const el = marker.getElement()
       el.classList.toggle('tracked', trackedIds.has(threat.id))
       const dot = el.querySelector('.threat-dot') as HTMLElement
@@ -264,9 +238,65 @@ export function TacticalMap({ threats, platforms, basemap }: TacticalMapProps) {
       if (!liveIds.has(key)) {
         marker.remove()
         markers.delete(key)
+        if (key.startsWith('t:')) {
+          const id = key.slice(2)
+          animRef.current.delete(id)
+          curRef.current.delete(id)
+        }
       }
     }
   }, [threats, platforms, ready])
+
+  // Animation loop: tween threat markers + their vectors/links between samples.
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map || !ready) return
+
+    let raf = 0
+    const frame = () => {
+      const { start, dur } = segRef.current
+      const k = dur > 0 ? Math.min(1, (performance.now() - start) / dur) : 1
+      const { threats, platforms } = loopDataRef.current
+      const markers = markersRef.current
+      const now = Date.now()
+
+      for (const threat of threats) {
+        const seg = animRef.current.get(threat.id)
+        if (!seg) continue
+        const cur: Position = {
+          x: seg.from.x + (seg.to.x - seg.from.x) * k,
+          y: seg.from.y + (seg.to.y - seg.from.y) * k,
+        }
+        curRef.current.set(threat.id, cur)
+        markers.get(`t:${threat.id}`)?.setLngLat(toLngLat(cur))
+      }
+
+      const links = platforms.flatMap(({ report, lastSeen }) =>
+        now - lastSeen > STALE_AFTER_MS
+          ? []
+          : report.threats.map((contact) => ({
+              type: 'Feature' as const,
+              geometry: {
+                type: 'LineString' as const,
+                coordinates: [
+                  toLngLat(report.position),
+                  toLngLat(curRef.current.get(contact.id) ?? contact.position),
+                ],
+              },
+              properties: {},
+            })),
+      )
+
+      ;(map.getSource('links') as GeoJSONSource | undefined)?.setData({
+        type: 'FeatureCollection',
+        features: links,
+      })
+
+      raf = requestAnimationFrame(frame)
+    }
+    raf = requestAnimationFrame(frame)
+    return () => cancelAnimationFrame(raf)
+  }, [ready])
 
   return <div ref={containerRef} className="h-full w-full" />
 }
