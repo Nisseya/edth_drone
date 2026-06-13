@@ -13,7 +13,7 @@ use vanguard_core::{
 
 use crate::cli::Args;
 
-const DETECTION_RANGE: f64 = 1_500.0;
+const DETECTION_RANGE: f64 = 20_000.0; // ground radar vs low-flying targets
 const DEFAULT_NATS_URL: &str = "nats://127.0.0.1:4222";
 
 #[tokio::main]
