@@ -102,11 +102,14 @@ export default function App() {
     impacts,
     publish,
     removePlatform,
+    retargetInterceptor,
+    abortInterceptor,
     reset,
   } = useNats()
   const [now, setNow] = useState(() => Date.now())
   const [basemap, setBasemap] = useState<Basemap>('dark')
   const [placing, setPlacing] = useState(false)
+  const [selectedInterceptor, setSelectedInterceptor] = useState<string | null>(null)
   const [pending, setPending] = useState<Position | null>(null)
   const [previewReach, setPreviewReach] = useState(15_000)
   const [zoneRadius, setZoneRadius] = useState(6_000)
@@ -197,7 +200,36 @@ export default function App() {
             interceptors={interceptors}
             bursts={bursts}
             zoneRadius={zoneRadius}
+            safeZone={engagements.safe_zone}
+            selectedInterceptor={selectedInterceptor}
+            onSelectInterceptor={setSelectedInterceptor}
+            onRetarget={retargetInterceptor}
           />
+          {selectedInterceptor && (
+            <div className="absolute left-1/2 top-3 flex -translate-x-1/2 items-center gap-3 border border-cyan-400/40 bg-[#070d13]/95 px-3 py-1.5 text-[11px] text-slate-300">
+              <span>
+                INTERCEPTOR <span className="text-cyan-300">{selectedInterceptor.slice(0, 8)}</span> —
+                click a hostile to re-task
+              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  abortInterceptor(selectedInterceptor)
+                  setSelectedInterceptor(null)
+                }}
+                className="border border-orange-400/50 px-2 py-0.5 font-bold tracking-widest text-orange-300 hover:bg-orange-400/10"
+              >
+                ABORT
+              </button>
+              <button
+                type="button"
+                onClick={() => setSelectedInterceptor(null)}
+                className="text-slate-500 hover:text-slate-300"
+              >
+                ✕
+              </button>
+            </div>
+          )}
         </main>
 
         <aside className="flex w-72 flex-col gap-4 overflow-y-auto border-l border-cyan-400/15 bg-[#070d13] p-3">

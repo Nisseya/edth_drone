@@ -25,12 +25,18 @@ interface TacticalMapProps {
   preview: { position: Position; reach: number } | null
   /** Active engagements (platform id → threat id) to draw firing lines. */
   engagements: { platform_id: string; threat_id: string }[]
-  /** Interceptors currently in flight (id + position) to animate. */
-  interceptors: { id: string; position: Position }[]
+  /** Interceptors currently in flight (id + position + abort state) to animate. */
+  interceptors: { id: string; position: Position; diverting: boolean }[]
   /** Impact bursts to play once (kill = cyan, real impact = red). */
   bursts: { key: number; position: Position; kind: 'kill' | 'impact' }[]
   /** Defended-zone radius in metres (follows the config slider). */
   zoneRadius: number
+  /** Safe drop zone where aborted interceptors self-destruct. */
+  safeZone: Position
+  /** Currently selected interceptor id (for re-task / abort), or null. */
+  selectedInterceptor: string | null
+  onSelectInterceptor: (id: string | null) => void
+  onRetarget: (interceptorId: string, threatId: string) => void
 }
 
 const BASE_STYLE: StyleSpecification = {
@@ -86,15 +92,25 @@ export function TacticalMap({
   interceptors,
   bursts,
   zoneRadius,
+  safeZone,
+  selectedInterceptor,
+  onSelectInterceptor,
+  onRetarget,
 }: TacticalMapProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<maplibregl.Map | null>(null)
   const markersRef = useRef(new Map<string, maplibregl.Marker>())
-  // Latest placement state, read by the (once-registered) click handler.
+  // Latest props, read by the (once-registered) marker/map click handlers.
   const placingRef = useRef(placing)
   placingRef.current = placing
   const onMapClickRef = useRef(onMapClick)
   onMapClickRef.current = onMapClick
+  const selectedRef = useRef(selectedInterceptor)
+  selectedRef.current = selectedInterceptor
+  const onSelectRef = useRef(onSelectInterceptor)
+  onSelectRef.current = onSelectInterceptor
+  const onRetargetRef = useRef(onRetarget)
+  onRetargetRef.current = onRetarget
   // Smooth interpolation between the 1 Hz ground-truth samples.
   const animRef = useRef(new Map<string, { from: Position; to: Position }>())
   const curRef = useRef(new Map<string, Position>())
@@ -104,9 +120,10 @@ export function TacticalMap({
     threats: Threat[]
     platforms: PlatformView[]
     engagements: { platform_id: string; threat_id: string }[]
-    interceptors: { id: string; position: Position }[]
+    interceptors: { id: string; position: Position; diverting: boolean }[]
   }>({ threats: [], platforms: [], engagements: [], interceptors: [] })
   const intTrailsRef = useRef(new Map<string, [number, number][]>())
+  const safeMarkerRef = useRef<maplibregl.Marker | null>(null)
   // Active impact bursts: key → {position, kind, start ms}.
   const burstsRef = useRef(new Map<number, { position: Position; kind: string; start: number }>())
   // Highest burst key already played — bursts are monotonic, so each plays once.
@@ -128,10 +145,20 @@ export function TacticalMap({
     map.addControl(new maplibregl.ScaleControl({ unit: 'metric' }), 'bottom-left')
 
     map.on('click', (e) => {
-      if (placingRef.current) onMapClickRef.current(fromLngLat(e.lngLat.lng, e.lngLat.lat))
+      if (placingRef.current) {
+        onMapClickRef.current(fromLngLat(e.lngLat.lng, e.lngLat.lat))
+      } else if (selectedRef.current) {
+        onSelectRef.current(null) // click empty map → deselect interceptor
+      }
     })
 
     map.on('load', () => {
+      // Safe drop zone marker (aborted interceptors self-destruct here).
+      const safe = document.createElement('div')
+      safe.className = 'safe-marker'
+      safe.innerHTML = '<div class="safe-core"></div><span class="safe-label">SAFE DROP ZONE</span>'
+      safeMarkerRef.current = new maplibregl.Marker({ element: safe }).setLngLat(toLngLat(safeZone)).addTo(map)
+
       // Defended zone — where threats aim. Radius set by an effect (config slider).
       map.addSource('zone', { type: 'geojson', data: empty() })
       map.addLayer({
@@ -265,6 +292,11 @@ export function TacticalMap({
     map.setLayoutProperty('sat-dim', 'visibility', sat ? 'visible' : 'none')
   }, [basemap, ready])
 
+  // Keep the safe-zone marker positioned.
+  useEffect(() => {
+    if (ready) safeMarkerRef.current?.setLngLat(toLngLat(safeZone))
+  }, [safeZone, ready])
+
   // Defended-zone circle follows the config slider.
   useEffect(() => {
     const map = mapRef.current
@@ -390,6 +422,15 @@ export function TacticalMap({
         const el = document.createElement('div')
         el.className = 'threat-marker'
         el.innerHTML = '<div class="threat-dot"></div><span class="threat-label"></span><div class="marker-tip"></div>'
+        // Click a threat while an interceptor is selected → re-task onto it.
+        const tid = threat.id
+        el.addEventListener('click', (ev) => {
+          if (selectedRef.current) {
+            ev.stopPropagation()
+            onRetargetRef.current(selectedRef.current, tid)
+            onSelectRef.current(null)
+          }
+        })
         // Initial position only — the rAF loop owns motion from here on.
         marker = new maplibregl.Marker({ element: el }).setLngLat(toLngLat(threat.position)).addTo(map)
         markers.set(key, marker)
@@ -423,18 +464,25 @@ export function TacticalMap({
         `${trackedIds.has(threat.id) ? ' — TRACKED' : ''}`
     }
 
-    // Interceptor markers (cyan darts in flight).
+    // Interceptor markers (cyan darts in flight; clickable to select).
     for (const it of interceptors) {
       const key = `i:${it.id}`
       liveIds.add(key)
-      if (!markers.has(key)) {
+      let marker = markers.get(key)
+      if (!marker) {
         const el = document.createElement('div')
         el.className = 'interceptor-marker'
-        markers.set(
-          key,
-          new maplibregl.Marker({ element: el }).setLngLat(toLngLat(it.position)).addTo(map),
-        )
+        const iid = it.id
+        el.addEventListener('click', (ev) => {
+          ev.stopPropagation()
+          onSelectRef.current(selectedRef.current === iid ? null : iid)
+        })
+        marker = new maplibregl.Marker({ element: el }).setLngLat(toLngLat(it.position)).addTo(map)
+        markers.set(key, marker)
       }
+      const el = marker.getElement()
+      el.classList.toggle('selected', it.id === selectedInterceptor)
+      el.classList.toggle('diverting', it.diverting)
     }
 
     for (const [key, marker] of markers) {
@@ -449,7 +497,7 @@ export function TacticalMap({
         }
       }
     }
-  }, [threats, platforms, ready, classifications, engagements, interceptors])
+  }, [threats, platforms, ready, classifications, engagements, interceptors, selectedInterceptor])
 
   // Animation loop: tween threat markers + their vectors/links between samples.
   useEffect(() => {

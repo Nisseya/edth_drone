@@ -66,12 +66,25 @@ pub struct ThreatDestroyed {
 pub const ENGAGEMENTS: &str = "control.engagements";
 /// Host → UI: positions of interceptors currently in flight.
 pub const INTERCEPTORS: &str = "control.interceptors";
+/// UI → host: redirect an in-flight interceptor to another target (`RetargetCommand`).
+pub const INTERCEPTOR_RETARGET: &str = "control.interceptor.retarget";
+/// UI → host: abort an in-flight interceptor (payload = interceptor id string).
+pub const INTERCEPTOR_ABORT: &str = "control.interceptor.abort";
 
-/// One interceptor (munition) in flight toward its target.
+/// One interceptor (munition) in flight toward its target (or diverting to the
+/// safe drop zone after an abort).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct FlyingInterceptor {
     pub id: Uuid,
     pub position: Position,
+    pub target_id: Uuid,
+    pub diverting: bool,
+}
+
+/// UI → host: send interceptor `interceptor_id` onto threat `target_id`.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RetargetCommand {
+    pub interceptor_id: Uuid,
     pub target_id: Uuid,
 }
 
@@ -87,4 +100,6 @@ pub struct Engagement {
 pub struct EngagementReport {
     pub lines: Vec<Engagement>,
     pub neutralized: usize,
+    /// Where aborted interceptors are sent to self-destruct (drawn on the map).
+    pub safe_zone: Position,
 }

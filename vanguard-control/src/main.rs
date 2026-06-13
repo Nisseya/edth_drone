@@ -9,12 +9,13 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use futures::StreamExt;
 use uuid::Uuid;
 use vanguard_core::{
-    CONTROL_RESET, ENGAGEMENTS, EngagementReport, INTERCEPTORS, MAP_CONFIG, MapConfig, PLATFORM_ADD,
-    PLATFORM_REMOVE, PlatformSpec, Position, Radar, THREAT_DESTROYED, THREATS_SUBJECT, Threat,
-    ThreatClassification, ThreatDestroyed, report_subject,
+    CONTROL_RESET, ENGAGEMENTS, EngagementReport, INTERCEPTOR_ABORT, INTERCEPTOR_RETARGET,
+    INTERCEPTORS, MAP_CONFIG, MapConfig, PLATFORM_ADD, PLATFORM_REMOVE, PlatformSpec, Position,
+    Radar, RetargetCommand, THREAT_DESTROYED, THREATS_SUBJECT, Threat, ThreatClassification,
+    ThreatDestroyed, report_subject,
 };
 
-use crate::engagement::Engagements;
+use crate::engagement::{Engagements, SAFE_ZONE};
 
 const DEFAULT_NATS_URL: &str = "nats://127.0.0.1:4222";
 const CLASSIFICATION_RANGE: f64 = 8_000.0;
@@ -37,6 +38,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut remove_sub = client.subscribe(PLATFORM_REMOVE).await?;
     let mut reset_sub = client.subscribe(CONTROL_RESET).await?;
     let mut config_sub = client.subscribe(MAP_CONFIG).await?;
+    let mut retarget_sub = client.subscribe(INTERCEPTOR_RETARGET).await?;
+    let mut abort_sub = client.subscribe(INTERCEPTOR_ABORT).await?;
     println!("control host online via {nats_url}");
 
     let mut radars = preset_radars(classification_range);
@@ -93,6 +96,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let report = EngagementReport {
                     lines: engagements.lines(),
                     neutralized: engagements.neutralized,
+                    safe_zone: SAFE_ZONE,
                 };
                 if let Ok(payload) = serde_json::to_vec(&report) {
                     let _ = client.publish(ENGAGEMENTS, payload.into()).await;
@@ -123,6 +127,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Some(msg) = config_sub.next() => {
                 if let Ok(cfg) = serde_json::from_slice::<MapConfig>(&msg.payload) {
                     time_scale = cfg.time_scale.max(0.0);
+                }
+            }
+
+            Some(msg) = retarget_sub.next() => {
+                if let Ok(cmd) = serde_json::from_slice::<RetargetCommand>(&msg.payload) {
+                    engagements.retarget(cmd.interceptor_id, cmd.target_id);
+                }
+            }
+
+            Some(msg) = abort_sub.next() => {
+                if let Ok(id) = std::str::from_utf8(&msg.payload).unwrap_or("").parse::<Uuid>() {
+                    engagements.abort(id);
                 }
             }
 

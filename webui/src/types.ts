@@ -113,11 +113,15 @@ export const INTERCEPTORS_SUBJECT = 'control.interceptors'
 export const THREAT_DESTROYED_SUBJECT = 'control.threat.destroyed'
 export const LEAKER_SUBJECT = 'control.leaker'
 
+export const INTERCEPTOR_RETARGET_SUBJECT = 'control.interceptor.retarget'
+export const INTERCEPTOR_ABORT_SUBJECT = 'control.interceptor.abort'
+
 /** Mirror of vanguard_core::FlyingInterceptor. */
 export interface FlyingInterceptor {
   id: string
   position: Position
   target_id: string
+  diverting: boolean
 }
 
 /** Mirror of vanguard_core::ThreatDestroyed. */
@@ -151,6 +155,7 @@ export interface Engagement {
 export interface EngagementReport {
   lines: Engagement[]
   neutralized: number
+  safe_zone: Position
 }
 
 export const STALE_AFTER_MS = 5_000

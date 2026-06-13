@@ -11,9 +11,9 @@ pub use kalman::KalmanTrack;
 pub use subjects::*;
 
 pub use control::{
-    CONTROL_RESET, ENGAGEMENTS, Engagement, EngagementReport, FlyingInterceptor, INTERCEPTORS,
-    LEAKER_EVENT, MAP_CONFIG, MapConfig, PLATFORM_ADD, PLATFORM_REMOVE, PlatformSpec,
-    THREAT_DESTROYED, ThreatDestroyed,
+    CONTROL_RESET, ENGAGEMENTS, Engagement, EngagementReport, FlyingInterceptor, INTERCEPTOR_ABORT,
+    INTERCEPTOR_RETARGET, INTERCEPTORS, LEAKER_EVENT, MAP_CONFIG, MapConfig, PLATFORM_ADD,
+    PLATFORM_REMOVE, PlatformSpec, RetargetCommand, THREAT_DESTROYED, ThreatDestroyed,
 };
 pub use events::{Assignment, Message};
 pub use interceptor::{
