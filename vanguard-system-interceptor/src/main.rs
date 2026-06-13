@@ -14,6 +14,9 @@ use vanguard_core::{
 use crate::cli::Args;
 
 const DETECTION_RANGE: f64 = 20_000.0; // ground radar vs low-flying targets
+// Range at which the sensor can tell a real drone from a decoy (optical/RF
+// discrimination only works up close). Override with CLASSIFICATION_RANGE_M.
+const CLASSIFICATION_RANGE: f64 = 8_000.0;
 // Above this speed a contact is classified as a cruise-missile-class fast mover.
 const MISSILE_SPEED: f64 = 300.0;
 const DEFAULT_NATS_URL: &str = "nats://127.0.0.1:4222";
@@ -53,6 +56,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         platform.reach,
         platform.interceptors.len(),
     );
+
+    let classification_range = std::env::var("CLASSIFICATION_RANGE_M")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(CLASSIFICATION_RANGE);
 
     let nats_url = std::env::var("NATS_URL").unwrap_or_else(|_| DEFAULT_NATS_URL.to_string());
     let client = async_nats::connect(&nats_url).await?;
@@ -115,10 +123,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             };
             last_seen.insert(threat.id, (threat.position.clone(), now));
 
-            let classification = if threat.speed >= MISSILE_SPEED {
-                ThreatClassification::CruiseMissile
+            // Real vs decoy can only be told once the contact is close enough.
+            // Beyond the classification range it stays an Unknown blip.
+            let (classification, confidence) = if range <= classification_range {
+                let class = if threat.is_decoy {
+                    ThreatClassification::Decoy
+                } else if threat.speed >= MISSILE_SPEED {
+                    ThreatClassification::CruiseMissile
+                } else {
+                    ThreatClassification::Drone
+                };
+                (class, 0.95)
             } else {
-                ThreatClassification::Drone
+                (ThreatClassification::Unknown, 0.3)
             };
             contacts.push(DetectedThreat {
                 id: threat.id,
@@ -126,7 +143,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 speed,
                 threat_level: threat.threat_level,
                 classification,
-                confidence: 0.9,
+                confidence,
                 detected_at: now_ms as f64 / 1000.0,
             });
             in_range.push(format!("{} at {:.0} m", short(&threat.id), range));

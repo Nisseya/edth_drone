@@ -64,6 +64,7 @@ pub struct DetectedThreat {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub enum ThreatClassification {
     Unknown,
+    Decoy,
     Drone,
     FPVDrone,
     Helicopter,

@@ -11,4 +11,5 @@ pub struct Threat {
     pub position: Position,
     pub speed: f64,
     pub threat_level: usize,
+    pub is_decoy: bool,
 }

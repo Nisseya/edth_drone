@@ -7,9 +7,14 @@ use vanguard_core::{Position, THREATS_SUBJECT, Threat};
 
 const WORLD_RADIUS: f64 = 50_000.0; // ingress ring, well outside every radar bubble
 const TICK: std::time::Duration = std::time::Duration::from_millis(500);
-const SPAWN_EVERY_TICKS: u64 = 24; // one threat every 12 s
+const SWARM_EVERY_TICKS: u64 = 90; // one swarm wave every ~45 s
 const PUBLISH_EVERY_TICKS: u64 = 2; // ground truth published every second
-const MAX_ACTIVE_THREATS: usize = 24; // saturation cap, keeps the raid readable
+const MAX_ACTIVE_THREATS: usize = 40; // saturation cap, keeps the raid readable
+const SWARM_SIZE: std::ops::Range<usize> = 6..13; // drones per wave
+const DECOY_RATIO: f64 = 0.4; // share of the wave that are empty decoys
+const SECTOR_SPREAD_DEG: f64 = 20.0; // wave fans out within ±20° of one bearing
+const REAL_SPEED: std::ops::Range<f64> = 100.0..170.0; // attack drones, m/s
+const DECOY_SPEED: std::ops::Range<f64> = 70.0..120.0; // decoys, a bit slower
 const IMPACT_RADIUS: f64 = 50.0;
 const SEED: u64 = 42;
 const DEFAULT_NATS_URL: &str = "nats://127.0.0.1:4222";
@@ -31,17 +36,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ticker.tick().await;
         let t = tick as f64 * dt;
 
-        if tick % SPAWN_EVERY_TICKS == 0 && threats.len() < MAX_ACTIVE_THREATS {
-            let threat = spawn_threat(&mut rng);
+        if tick % SWARM_EVERY_TICKS == 0 && threats.len() < MAX_ACTIVE_THREATS {
+            let swarm = spawn_swarm(&mut rng);
+            let decoys = swarm.iter().filter(|t| t.is_decoy).count();
+            let bearing = swarm[0].position.y.atan2(swarm[0].position.x).to_degrees();
             println!(
-                "[{t:6.1}s] threat {} spawned at ({:.0}, {:.0}) — {:.0} m/s, level {}",
-                short(&threat.id),
-                threat.position.x,
-                threat.position.y,
-                threat.speed,
-                threat.threat_level,
+                "[{t:6.1}s] SWARM inbound — {} drones ({} decoys) bearing {:.0}°",
+                swarm.len(),
+                decoys,
+                (bearing + 360.0) % 360.0,
             );
-            threats.push(threat);
+            threats.extend(swarm);
         }
 
         for threat in &mut threats {
@@ -76,28 +81,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn spawn_threat(rng: &mut StdRng) -> Threat {
-    let angle = rng.gen_range(0.0..TAU);
-    // Realistic raid mix: mostly Shahed/Geran-class loitering munitions —
-    // 180 km/h (classic Shahed-136 cruise) up to 300 km/h (modernized
-    // Geran-2 variants) — plus some cruise-missile-class fast movers
-    // (~800-950 km/h, Kalibr/Kh-101 class).
-    // Speeds doubled on purpose for demo pacing.
-    let (speed, threat_level) = if rng.gen_bool(0.7) {
-        (rng.gen_range(100.0..170.0), rng.gen_range(2..5))
-    } else {
-        (rng.gen_range(440.0..530.0), rng.gen_range(4..6))
-    };
+/// One attack wave: real loitering munitions mixed with empty decoys, all
+/// ingressing from the same bearing sector (±SECTOR_SPREAD_DEG).
+fn spawn_swarm(rng: &mut StdRng) -> Vec<Threat> {
+    let center_bearing = rng.gen_range(0.0..TAU);
+    let spread = SECTOR_SPREAD_DEG.to_radians();
+    let size = rng.gen_range(SWARM_SIZE);
 
-    Threat {
-        id: Uuid::new_v4(),
-        position: Position {
-            x: WORLD_RADIUS * angle.cos(),
-            y: WORLD_RADIUS * angle.sin(),
-        },
-        speed,
-        threat_level,
-    }
+    (0..size)
+        .map(|_| {
+            let angle = center_bearing + rng.gen_range(-spread..spread);
+            let is_decoy = rng.gen_bool(DECOY_RATIO);
+            let (speed, threat_level) = if is_decoy {
+                (rng.gen_range(DECOY_SPEED), 1)
+            } else {
+                (rng.gen_range(REAL_SPEED), rng.gen_range(3..6))
+            };
+
+            Threat {
+                id: Uuid::new_v4(),
+                position: Position {
+                    x: WORLD_RADIUS * angle.cos(),
+                    y: WORLD_RADIUS * angle.sin(),
+                },
+                speed,
+                threat_level,
+                is_decoy,
+            }
+        })
+        .collect()
 }
 
 fn short(id: &Uuid) -> String {

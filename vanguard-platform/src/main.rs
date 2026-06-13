@@ -43,6 +43,7 @@ async fn main() -> anyhow::Result<()> {
         threats: HashMap::new(),
         engaged_threats: HashSet::new(),
         tracks: HashMap::new(),
+        known_interceptors: HashMap::new(),
     };
 
     let platform = Platform { state, nats };

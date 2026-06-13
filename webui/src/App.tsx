@@ -1,7 +1,20 @@
 import { useEffect, useMemo, useState } from 'react'
 import { type Basemap, TacticalMap } from './TacticalMap'
-import { REMOVE_AFTER_MS, STALE_AFTER_MS, type PlatformView, type Threat } from './types'
+import {
+  REMOVE_AFTER_MS,
+  STALE_AFTER_MS,
+  trackCategory,
+  type PlatformView,
+  type Threat,
+  type TrackCategory,
+} from './types'
 import { useNats, type ConnectionStatus } from './useNats'
+
+const CATEGORY_TAG: Record<TrackCategory, { label: string; cls: string }> = {
+  real: { label: 'REAL', cls: 'bg-red-500/20 text-red-400 border-red-500/40' },
+  decoy: { label: 'DECOY', cls: 'bg-slate-500/20 text-slate-300 border-slate-500/40' },
+  unknown: { label: '???', cls: 'bg-amber-500/20 text-amber-300 border-amber-500/40' },
+}
 
 const STATUS_STYLE: Record<ConnectionStatus, { label: string; dot: string; text: string }> = {
   connected: { label: 'LINK ESTABLISHED', dot: 'bg-emerald-400', text: 'text-emerald-400' },
@@ -39,7 +52,7 @@ function PlatformCard({ view, now }: { view: PlatformView; now: number }) {
           </span>
         </span>
         <span>
-          RANGE <span className="text-slate-200">{(report.range / 1000).toFixed(1)} km</span>
+          RANGE <span className="text-slate-200">{(report.reach / 1000).toFixed(1)} km</span>
         </span>
         <span>
           CONTACTS <span className="text-cyan-300">{report.threats.length}</span>
@@ -56,24 +69,32 @@ function PlatformCard({ view, now }: { view: PlatformView; now: number }) {
   )
 }
 
-function ThreatRow({ threat }: { threat: Threat }) {
+function ThreatRow({ threat, category }: { threat: Threat; category: TrackCategory }) {
   const distance = Math.hypot(threat.position.x, threat.position.y)
+  const tag = CATEGORY_TAG[category]
   return (
-    <div className="flex items-center gap-2 border-b border-slate-800/60 py-1.5 text-[11px]">
+    <div
+      className={`flex items-center gap-2 border-b border-slate-800/60 py-1.5 text-[11px] ${
+        category === 'decoy' ? 'opacity-50' : ''
+      }`}
+    >
+      <span className={`border px-1.5 py-0.5 font-bold ${tag.cls}`}>{tag.label}</span>
       <span className={`border px-1.5 py-0.5 font-bold ${threatBadge(threat.threat_level)}`}>
         L{threat.threat_level}
       </span>
       <span className="text-slate-300">{threat.id.slice(0, 8)}</span>
       <span className="ml-auto text-slate-400">{(distance / 1000).toFixed(2)} km</span>
-      <span className="w-14 text-right text-slate-500">{threat.speed.toFixed(0)} m/s</span>
     </div>
   )
 }
 
 export default function App() {
-  const { status, threats, platforms } = useNats()
+  const { status, threats, platforms, classifications } = useNats()
   const [now, setNow] = useState(() => Date.now())
   const [basemap, setBasemap] = useState<Basemap>('dark')
+
+  const categoryOf = (threat: Threat): TrackCategory =>
+    trackCategory(classifications.get(threat.id) ?? 'Unknown')
 
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 1000)
@@ -95,6 +116,12 @@ export default function App() {
       ),
     [threats],
   )
+  const counts = useMemo(() => {
+    const c = { real: 0, decoy: 0, unknown: 0 }
+    for (const t of threats) c[categoryOf(t)] += 1
+    return c
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [threats, classifications])
   const statusStyle = STATUS_STYLE[status]
   const clock = new Date(now).toISOString().slice(11, 19)
 
@@ -110,7 +137,13 @@ export default function App() {
         </div>
         <div className="ml-auto flex items-center gap-5 text-[11px] text-slate-400">
           <span>
-            HOSTILES <span className="font-bold text-red-400">{threats.length}</span>
+            REAL <span className="font-bold text-red-400">{counts.real}</span>
+          </span>
+          <span>
+            DECOY <span className="font-bold text-slate-300">{counts.decoy}</span>
+          </span>
+          <span>
+            ??? <span className="font-bold text-amber-300">{counts.unknown}</span>
           </span>
           <span>
             PLATFORMS <span className="font-bold text-emerald-400">{platformList.length}</span>
@@ -128,7 +161,12 @@ export default function App() {
 
       <div className="flex min-h-0 flex-1">
         <main className="relative min-w-0 flex-1">
-          <TacticalMap threats={threats} platforms={platformList} basemap={basemap} />
+          <TacticalMap
+            threats={threats}
+            platforms={platformList}
+            basemap={basemap}
+            classifications={classifications}
+          />
         </main>
 
         <aside className="flex w-72 flex-col gap-4 overflow-y-auto border-l border-cyan-400/15 bg-[#070d13] p-3">
@@ -154,7 +192,7 @@ export default function App() {
               <p className="text-[11px] text-slate-600">Airspace clear.</p>
             )}
             {sortedThreats.map((threat) => (
-              <ThreatRow key={threat.id} threat={threat} />
+              <ThreatRow key={threat.id} threat={threat} category={categoryOf(threat)} />
             ))}
           </section>
         </aside>

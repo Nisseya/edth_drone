@@ -1,6 +1,6 @@
 import { connect, type NatsConnection } from 'nats.ws'
 import { useEffect, useState } from 'react'
-import type { InterceptorReport, PlatformView, Threat } from './types'
+import type { InterceptorReport, PlatformView, Threat, ThreatClassification } from './types'
 
 export type ConnectionStatus = 'connecting' | 'connected' | 'offline'
 
@@ -15,6 +15,12 @@ export function useNats(url: string = NATS_WS_URL) {
   const [status, setStatus] = useState<ConnectionStatus>('connecting')
   const [threats, setThreats] = useState<Threat[]>([])
   const [platforms, setPlatforms] = useState<Map<string, PlatformView>>(new Map())
+  // Operator picture: best classification known per track id, fused across
+  // platform reports. A track stays out of this map until a platform resolves
+  // it within its classification range.
+  const [classifications, setClassifications] = useState<Map<string, ThreatClassification>>(
+    new Map(),
+  )
 
   useEffect(() => {
     let connection: NatsConnection | undefined
@@ -48,7 +54,15 @@ export function useNats(url: string = NATS_WS_URL) {
 
       void (async () => {
         for await (const message of connection.subscribe('map.threats')) {
-          setThreats(JSON.parse(decoder.decode(message.data)) as Threat[])
+          const live = JSON.parse(decoder.decode(message.data)) as Threat[]
+          setThreats(live)
+          // Drop classifications for tracks that no longer exist.
+          const liveIds = new Set(live.map((t) => t.id))
+          setClassifications((previous) => {
+            const next = new Map(previous)
+            for (const id of next.keys()) if (!liveIds.has(id)) next.delete(id)
+            return next
+          })
         }
       })()
 
@@ -58,6 +72,16 @@ export function useNats(url: string = NATS_WS_URL) {
           setPlatforms((previous) => {
             const next = new Map(previous)
             next.set(report.platform_id, { report, lastSeen: Date.now() })
+            return next
+          })
+          // Record any definitive classification (a closer platform resolves it).
+          setClassifications((previous) => {
+            const next = new Map(previous)
+            for (const contact of report.threats) {
+              if (contact.classification !== 'Unknown') {
+                next.set(contact.id, contact.classification)
+              }
+            }
             return next
           })
         }
@@ -70,5 +94,5 @@ export function useNats(url: string = NATS_WS_URL) {
     }
   }, [url])
 
-  return { status, threats, platforms }
+  return { status, threats, platforms, classifications }
 }

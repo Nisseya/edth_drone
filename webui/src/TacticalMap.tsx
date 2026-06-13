@@ -3,7 +3,14 @@ import maplibregl, { type GeoJSONSource, type StyleSpecification } from 'maplibr
 import 'maplibre-gl/dist/maplibre-gl.css'
 import { useEffect, useRef, useState } from 'react'
 import { KYIV, rangeRing, toLngLat } from './geo'
-import { STALE_AFTER_MS, type PlatformView, type Position, type Threat } from './types'
+import {
+  STALE_AFTER_MS,
+  trackCategory,
+  type PlatformView,
+  type Position,
+  type Threat,
+  type ThreatClassification,
+} from './types'
 
 export type Basemap = 'dark' | 'sat'
 
@@ -11,6 +18,7 @@ interface TacticalMapProps {
   threats: Threat[]
   platforms: PlatformView[]
   basemap: Basemap
+  classifications: Map<string, ThreatClassification>
 }
 
 const BASE_STYLE: StyleSpecification = {
@@ -46,15 +54,14 @@ const BASE_STYLE: StyleSpecification = {
   ],
 }
 
-function threatColor(level: number): string {
-  if (level >= 5) return '#ff3b4d'
-  if (level >= 4) return '#ff6b35'
-  if (level >= 3) return '#ffa02e'
-  return '#ffd23e'
-}
+// Operator-picture colours: unknown until classified, then real vs decoy.
+const CATEGORY_COLOR = {
+  unknown: '#ffd23e', // amber
+  real: '#ff3b4d', // red
+  decoy: '#8aa3b5', // grey
+} as const
 
-
-export function TacticalMap({ threats, platforms, basemap }: TacticalMapProps) {
+export function TacticalMap({ threats, platforms, basemap, classifications }: TacticalMapProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<maplibregl.Map | null>(null)
   const markersRef = useRef(new Map<string, maplibregl.Marker>())
@@ -161,7 +168,7 @@ export function TacticalMap({ threats, platforms, basemap }: TacticalMapProps) {
       type: 'Feature' as const,
       geometry: {
         type: 'Polygon' as const,
-        coordinates: [rangeRing(report.position, report.range)],
+        coordinates: [rangeRing(report.position, report.reach)],
       },
       properties: { stale: now - lastSeen > STALE_AFTER_MS },
     }))
@@ -203,7 +210,7 @@ export function TacticalMap({ threats, platforms, basemap }: TacticalMapProps) {
       el.querySelector('.platform-label')!.textContent = report.name.toUpperCase()
       el.querySelector('.marker-tip')!.textContent =
         `${report.name.toUpperCase()} — ${report.interceptors_remaining} interceptor(s), ` +
-        `range ${(report.range / 1000).toFixed(1)} km, ${report.threats.length} contact(s)`
+        `range ${(report.reach / 1000).toFixed(1)} km, ${report.threats.length} contact(s)`
     }
 
     for (const threat of threats) {
@@ -221,15 +228,29 @@ export function TacticalMap({ threats, platforms, basemap }: TacticalMapProps) {
       }
       const el = marker.getElement()
       el.classList.toggle('tracked', trackedIds.has(threat.id))
+
+      // Colour/shape by the operator's classification, not ground truth.
+      const category = trackCategory(classifications.get(threat.id) ?? 'Unknown')
+      const color = CATEGORY_COLOR[category]
       const dot = el.querySelector('.threat-dot') as HTMLElement
       const size = 7 + threat.threat_level * 1.6
       dot.style.width = `${size}px`
       dot.style.height = `${size}px`
-      dot.style.background = threatColor(threat.threat_level)
-      dot.style.boxShadow = `0 0 10px 2px ${threatColor(threat.threat_level)}88`
+      if (category === 'decoy') {
+        // Hollow grey ring — a harmless decoy.
+        dot.style.background = 'transparent'
+        dot.style.border = `2px solid ${color}`
+        dot.style.boxShadow = 'none'
+      } else {
+        dot.style.background = color
+        dot.style.border = 'none'
+        dot.style.boxShadow = `0 0 10px 2px ${color}88`
+      }
+      const label =
+        category === 'real' ? 'REAL' : category === 'decoy' ? 'DECOY' : 'UNKNOWN'
       el.querySelector('.threat-label')!.textContent = threat.id.slice(0, 8)
       el.querySelector('.marker-tip')!.textContent =
-        `HOSTILE ${threat.id.slice(0, 8)} — LVL ${threat.threat_level}, ` +
+        `${label} ${threat.id.slice(0, 8)} — LVL ${threat.threat_level}, ` +
         `${threat.speed.toFixed(0)} m/s, ${(Math.hypot(threat.position.x, threat.position.y) / 1000).toFixed(2)} km from asset` +
         `${trackedIds.has(threat.id) ? ' — TRACKED' : ''}`
     }
@@ -245,7 +266,7 @@ export function TacticalMap({ threats, platforms, basemap }: TacticalMapProps) {
         }
       }
     }
-  }, [threats, platforms, ready])
+  }, [threats, platforms, ready, classifications])
 
   // Animation loop: tween threat markers + their vectors/links between samples.
   useEffect(() => {

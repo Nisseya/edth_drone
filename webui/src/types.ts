@@ -18,12 +18,37 @@ export interface Threat {
   threat_level: number
 }
 
+/** Mirror of vanguard_core::ThreatClassification. */
+export type ThreatClassification =
+  | 'Unknown'
+  | 'Decoy'
+  | 'Drone'
+  | 'FPVDrone'
+  | 'Helicopter'
+  | 'Aircraft'
+  | 'CruiseMissile'
+  | 'BallisticMissile'
+  | 'Friendly'
+  | 'Civilian'
+
 /** One radar contact inside an InterceptorReport. */
 export interface DetectedThreat {
   id: string
   position: Position
   speed: Speed
   threat_level: number
+  classification: ThreatClassification
+  confidence: number
+  detected_at: number
+}
+
+/** Operator-side category derived from fused platform classifications. */
+export type TrackCategory = 'unknown' | 'real' | 'decoy'
+
+export function trackCategory(classification: ThreatClassification): TrackCategory {
+  if (classification === 'Decoy') return 'decoy'
+  if (classification === 'Unknown') return 'unknown'
+  return 'real'
 }
 
 /** Radar report published by each platform on `platform.<id>.report`. */
@@ -31,7 +56,7 @@ export interface InterceptorReport {
   platform_id: string
   name: string
   position: Position
-  range: number
+  reach: number
   threats: DetectedThreat[]
   interceptors_remaining: number
   timestamp: number
