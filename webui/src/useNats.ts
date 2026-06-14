@@ -27,7 +27,15 @@ const FLUSH_MS = 150
 
 export type ConnectionStatus = 'connecting' | 'connected' | 'offline'
 
-const NATS_WS_URL = 'ws://127.0.0.1:8080'
+declare global {
+  interface Window {
+    __NATS_URL__?: string
+  }
+}
+
+// Injected at container start into /config.js (see webui/Dockerfile); falls
+// back to localhost for local `pnpm dev`.
+const NATS_WS_URL = window.__NATS_URL__ ?? 'ws://127.0.0.1:8080'
 
 /**
  * Connects to the NATS WebSocket listener and keeps the live picture. Incoming

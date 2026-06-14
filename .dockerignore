@@ -4,3 +4,5 @@ webui/node_modules/
 webui/dist/
 .git/
 *.log
+# Bundled NATS server binaries committed in the tree — never needed in a build.
+vanguard-platform/nats-server-*/

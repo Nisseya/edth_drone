@@ -1,0 +1,16 @@
+server {
+    listen       ${PORT};
+    server_name  _;
+    root         /usr/share/nginx/html;
+    index        index.html;
+
+    # SPA: every unknown route falls back to index.html.
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    # Runtime config must never be cached, so a redeploy picks up a new URL.
+    location = /config.js {
+        add_header Cache-Control "no-store";
+    }
+}

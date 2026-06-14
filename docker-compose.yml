@@ -40,5 +40,8 @@ services:
     build: ./webui
     ports:
       - "5173:80"
+    environment:
+      # URL the browser uses to reach the NATS WebSocket (host-published 8080).
+      NATS_WS_URL: ws://localhost:8080
     depends_on:
       - nats
